@@ -1,64 +1,139 @@
 Add-Type -AssemblyName System.Windows.Forms
 
-# Configuración y variables globales
-$token = "sl.u.AFnQcB96oZhA_qWNVkFkiS6QS-u2NgeVd_ZN72ujPChg1en6CUZFG1z9A5Ldl47c8XClOoXtzoPQ4BXzPugllI7abs1tnqu6od4R-M9emhQzg3VXJoKZ9-0tV5GXyfGupX4lfgTwEamx7lMQOQCXBKuL7Yj24N3WV0j0z9ohkRiJAdrMg-HeSWJuqDojNPpNMgFYfAoaiy6yoqamThsTQPX3J7sORDkw8yPdDJZTbHvp28kHBFYdM36DW7jz0AhU3ak00mS88f5vdarg_mb-gv08GvnbGsYkzXNEzefow2z8sxPVzjusUvLLEoy4_TYRDmzCNxgSSFujkswGiPnjeeHqgd7MqWat4KpDTEkI1y5WQXU8scwExjDR2G22x6krP5u-TcXhmdY4gZf6LKVQ-d4gYF9oLV6hwBO2hJciAKjCJTHFL42TBBG96eTR5dyxER2yy-y3dvaCNbYQL4x-A-_IuR5LsMMVVnASeLzmyEY5DJ7a-gOAjIUojr2V5fOuRRD56NcCWOlaDyrAirb9Dca92mSRcUeYct4uSJuNdd26YD6Xm6QquZ4lpDahAU9coRx8Vmf-DociZZcDJfd0XvaH8tHBB4q4QyRThVCH8V9LT2hfuUF7MbAuZS5tVAGzg2w-3aB1IIrCKxAkS1DcMs0oG_47Ndx-ELMaFpy5FUruQzObUQGQvWO4-LiilLFo4AmwltiQBGjgB5V-yR5dpHhM9KBQ2J9tdl4FQefCU1vRpNfPYgI-PTaHg8gAfAuVmq2eKeX-iZeXcPrF1PJCcEEkGdSjIbeOp2odP2K7guapxpaPIIDWWB9PDGFTNMC5BtSRy8VWrGe0wmNDNmnu2fw8jA9M7Vq4JinYXXksxUsG-XkGvZPlDGKDqh4KMMJIGwO3rEAKsKa5rhiIbGvd6UrIGLY1EgMPrpgRvijRWJyWcCyZaF6t5qzHe716JYke4w1M02IhAEEm8ymUNz5nEzOzQ78baLFneK1m1dnyyrVCsmsmPsSFwipu-kHmAUUSg11JeCBP1slHOaVGF32g4Skw93R4YzxDluEe0KLMbWkex1YuWaphjr8JGxkmKfkR1Jt_9yOhSCqxOueEm0gDpBKXNErRgB8j8lSrl1YUgk6UI38FAKMCcZigeTvMwUtoTAjZQ-9K4sWkkQEwep1VI7x9vIhu_2sMI3LBfC5Sj_r6FLfy-4I15eFz6ocrzhg515YShXWlFxag4BifmxlFS6eCloPsEZdtRGa7SVppuPc_am8ILsyhb8Nhdq-sFh0ji3SRgPcnWx7AEdAsocPdpIAxmWWJKTLo2_3xQ01gxCMsicIW_oCHe8jbrPbb3imZ5Un3anDpWAQlQERipdfOWxxT"
-$headers = @{ "Authorization" = "Bearer $token"; "Content-Type" = "application/json" }
-$global:downloadDirectory = ""
-$global:currentPath = ""
-$global:history = @()
-$global:downloadedFiles = @()
+# Función para obtener el token de acceso
+function Get-AccessToken {
+    $AppKey = "8g8oqwp5x26h58o"
+    $AppSecret = "z3690pwzqowtzjx"
+    $RefreshToken = "g8E8wsPIxW8AAAAAAAAAAUVpLeEobmxg1sWlIdufgjninvxJp2x4-YLIC53n6gNe"
 
-# Funciones para obtener carpetas y archivos
-function Get-Folders {
-    $url = "https://api.dropboxapi.com/2/files/list_folder"
-    $body = @{ path = $global:currentPath } | ConvertTo-Json -Compress
+    $Body = @{
+        refresh_token = $RefreshToken
+        grant_type    = "refresh_token"
+        client_id     = $AppKey
+        client_secret = $AppSecret
+    }
+
+    $Headers = @{ "Content-Type" = "application/x-www-form-urlencoded" }
+    $Url = "https://api.dropboxapi.com/oauth2/token"
+    
     try {
-        $response = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
-        return $response.entries | Where-Object { $_.".tag" -eq "folder" }
+        $Response = Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body
+        return $Response.access_token
     } catch {
-        return @()
+        Write-Host "Error al renovar el token: $($_.Exception.Message)"
+        return $null
     }
 }
 
-function Get-Files {
-    $url = "https://api.dropboxapi.com/2/files/list_folder"
-    $body = @{ path = $global:currentPath } | ConvertTo-Json -Compress
-    try {
-        $response = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
-        return $response.entries | Where-Object { $_.".tag" -eq "file" }
-    } catch {
-        return @()
-    }
+# Obtener el token de acceso
+$global:accessToken = Get-AccessToken
+if (-not $global:accessToken) {
+    [System.Windows.Forms.MessageBox]::Show("Error al obtener el token de acceso.")
+    exit
 }
 
-# Funciones para actualizar listas y descargar archivos
+# Crear formulario principal
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Explorador de Dropbox"
+$form.Size = New-Object System.Drawing.Size(600, 450)
+
+# Crear ListBox para carpetas
+$global:listBoxFolders = New-Object System.Windows.Forms.ListBox
+$global:listBoxFolders.Location = New-Object System.Drawing.Point(10, 10)
+$global:listBoxFolders.Size = New-Object System.Drawing.Size(260, 150)
+$global:listBoxFolders.SelectionMode = "MultiExtended"
+$global:listBoxFolders.Add_DoubleClick({ Enter-Folder })
+$form.Controls.Add($global:listBoxFolders)
+
+# Crear ListBox para archivos
+$global:listBoxFiles = New-Object System.Windows.Forms.ListBox
+$global:listBoxFiles.Location = New-Object System.Drawing.Point(280, 10)
+$global:listBoxFiles.Size = New-Object System.Drawing.Size(260, 150)
+$global:listBoxFiles.SelectionMode = "MultiExtended"
+$form.Controls.Add($global:listBoxFiles)
+
+# Crear ListBox para estado de descargas
+$global:listBoxStatus = New-Object System.Windows.Forms.ListBox
+$global:listBoxStatus.Location = New-Object System.Drawing.Point(10, 170)
+$global:listBoxStatus.Size = New-Object System.Drawing.Size(530, 100)
+$form.Controls.Add($global:listBoxStatus)
+
+# Botón para seleccionar carpeta de descarga
+$btnSelectFolder = New-Object System.Windows.Forms.Button
+$btnSelectFolder.Text = "Seleccionar Carpeta"
+$btnSelectFolder.Location = New-Object System.Drawing.Point(10, 280)
+$btnSelectFolder.Size = New-Object System.Drawing.Size(150, 30)
+$btnSelectFolder.Add_Click({
+    $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    if ($folderDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $global:downloadDirectory = $folderDialog.SelectedPath
+    }
+})
+$form.Controls.Add($btnSelectFolder)
+
+# Botón para descargar archivos seleccionados
+$btnDownload = New-Object System.Windows.Forms.Button
+$btnDownload.Text = "Descargar"
+$btnDownload.Location = New-Object System.Drawing.Point(180, 280)
+$btnDownload.Size = New-Object System.Drawing.Size(100, 30)
+$btnDownload.Add_Click({ DownloadFiles })
+$form.Controls.Add($btnDownload)
+
+# Función para obtener carpetas y archivos
 function Update-Lists {
-    $listBoxFolders.Items.Clear()
-    $listBoxFiles.Items.Clear()
-    $listBoxStatus.Items.Clear()
+    $global:listBoxFolders.Items.Clear()
+    $global:listBoxFiles.Items.Clear()
     
     if ($global:currentPath -ne "") {
-        $listBoxFolders.Items.Add("...")
+        $global:listBoxFolders.Items.Add("...")
     }
     
-    $folders = Get-Folders
-    foreach ($folder in $folders) { 
-        $listBoxFolders.Items.Add($folder.name)
-    }
+    $url = "https://api.dropboxapi.com/2/files/list_folder"
+    $body = @{ path = $global:currentPath } | ConvertTo-Json -Compress
+    $headers = @{ "Authorization" = "Bearer $global:accessToken"; "Content-Type" = "application/json" }
     
-    $files = Get-Files
-    foreach ($file in $files) {
-        $listBoxFiles.Items.Add($file.name)
+    try {
+        $response = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
+        foreach ($entry in $response.entries) {
+            if ($entry.".tag" -eq "folder") {
+                $global:listBoxFolders.Items.Add($entry.name)
+            } elseif ($entry.".tag" -eq "file") {
+                $global:listBoxFiles.Items.Add($entry.name)
+            }
+        }
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Error al cargar archivos y carpetas.")
     }
 }
 
+# Función para descargar archivos de Dropbox
+function Download-FileFromDropbox($fileName) {
+    $dropboxPath = if ($global:currentPath -eq "") { "/$fileName" } else { "$global:currentPath/$fileName" }
+    $localPath = Join-Path $global:downloadDirectory $fileName
+
+    $url = "https://content.dropboxapi.com/2/files/download"
+    $headers = @{
+        "Authorization"    = "Bearer $global:accessToken"
+        "Dropbox-API-Arg"  = ("{`"path`": `"$dropboxPath`"}" | ConvertTo-Json -Compress).Replace('"', '\"')
+    }
+
+    try {
+        Invoke-RestMethod -Uri $url -Method Get -Headers $headers -OutFile $localPath
+        return $localPath
+    } catch {
+        Write-Host "Error al descargar $fileName $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# Función para descargar archivos antes de ordenar
 function DownloadFiles {
     if ([string]::IsNullOrEmpty($global:downloadDirectory)) {
         [System.Windows.Forms.MessageBox]::Show("Selecciona primero la carpeta de destino.")
         return
     }
     
-    $selectedFiles = $listBoxFiles.SelectedItems
+    $selectedFiles = $global:listBoxFiles.SelectedItems
     if ($selectedFiles.Count -eq 0) {
         [System.Windows.Forms.MessageBox]::Show("No se ha seleccionado ningún archivo.")
         return
@@ -67,91 +142,35 @@ function DownloadFiles {
     $global:downloadedFiles = @()
     
     foreach ($file in $selectedFiles) {
-        $dropboxFilePath = if ($global:currentPath -eq "") { "/$file" } else { "$global:currentPath/$file" }
-        $localFilePath = Join-Path $global:downloadDirectory $file
-        $downloadArgs = @{ path = $dropboxFilePath } | ConvertTo-Json -Compress
-        $url = "https://content.dropboxapi.com/2/files/download"
-        
-        try {
-            $listBoxStatus.Items.Add("Descargando: $file")
-            $client = New-Object System.Net.WebClient
-            $client.Headers.Add("Authorization", "Bearer $token")
-            $client.Headers.Add("Dropbox-API-Arg", $downloadArgs)
-            $client.DownloadFile($url, $localFilePath)
-            $global:downloadedFiles += $localFilePath
-            $listBoxStatus.Items.Add("Completado: $file")
-        } catch {
-            $listBoxStatus.Items.Add("❌ Error al descargar $file")
+        $downloadedFile = Download-FileFromDropbox $file
+        if ($downloadedFile) {
+            $global:listBoxStatus.Items.Add("$file descargado correctamente.")
+            $global:downloadedFiles += $downloadedFile
+        } else {
+            $global:listBoxStatus.Items.Add("Error al descargar $file.")
         }
     }
     
-    [System.Windows.Forms.MessageBox]::Show("Descarga finalizada.")
     Open-SortWindow
 }
 
-# Función para abrir la ventana de ordenamiento
+# Ventana de ordenamiento de archivos
 function Open-SortWindow {
     $sortForm = New-Object System.Windows.Forms.Form
     $sortForm.Text = "Ordenar Archivos"
     $sortForm.Size = New-Object System.Drawing.Size(400, 500)
-
+    
     $listBoxSort = New-Object System.Windows.Forms.ListBox
     $listBoxSort.Location = New-Object System.Drawing.Point(10, 10)
     $listBoxSort.Size = New-Object System.Drawing.Size(360, 250)
-    $listBoxSort.SelectionMode = "One"
     foreach ($file in $global:downloadedFiles) {
-        $listBoxSort.Items.Add((Get-Item $file).Name)
+        $listBoxSort.Items.Add($file)
     }
     $sortForm.Controls.Add($listBoxSort)
-
-    $statusLabel = New-Object System.Windows.Forms.Label
-    $statusLabel.Location = New-Object System.Drawing.Point(10, 270)
-    $statusLabel.Size = New-Object System.Drawing.Size(360, 100)
-    $sortForm.Controls.Add($statusLabel)
-
-    $moveUpButton = New-Object System.Windows.Forms.Button
-    $moveUpButton.Text = "Subir"
-    $moveUpButton.Location = New-Object System.Drawing.Point(50, 380)
-    $moveUpButton.Size = New-Object System.Drawing.Size(100, 30)
-    $moveUpButton.Add_Click({ Move-ItemUp $listBoxSort })
-    $sortForm.Controls.Add($moveUpButton)
-
-    $moveDownButton = New-Object System.Windows.Forms.Button
-    $moveDownButton.Text = "Bajar"
-    $moveDownButton.Location = New-Object System.Drawing.Point(160, 380)
-    $moveDownButton.Size = New-Object System.Drawing.Size(100, 30)
-    $moveDownButton.Add_Click({ Move-ItemDown $listBoxSort })
-    $sortForm.Controls.Add($moveDownButton)
-
-    $executeButton = New-Object System.Windows.Forms.Button
-    $executeButton.Text = "Ejecutar"
-    $executeButton.Location = New-Object System.Drawing.Point(270, 380)
-    $executeButton.Size = New-Object System.Drawing.Size(100, 30)
-    $executeButton.Add_Click({ Execute-Files ($listBoxSort.Items) $statusLabel })
-    $sortForm.Controls.Add($executeButton)
 
     $sortForm.ShowDialog()
 }
 
-# Función para ejecutar archivos en orden y mostrar estado
-function Execute-Files {
-    param ($orderedFiles, $statusLabel)
-    $statusLabel.Text = ""
-    
-    foreach ($file in $orderedFiles) {
-        $fullPath = Join-Path $global:downloadDirectory $file
-        if (Test-Path $fullPath) {
-            try {
-                Start-Process -FilePath $fullPath -Wait
-                $statusLabel.Text += "Instalado: $file`n"
-            } catch {
-                $statusLabel.Text += "No instalado: $file`n"
-            }
-        } else {
-            $statusLabel.Text += "No instalado: $file`n"
-        }
-    }
-}
-
 Update-Lists
 $form.ShowDialog()
+
