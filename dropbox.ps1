@@ -159,7 +159,3 @@ $listBoxFolders.Add_DoubleClick({
 # Actualizar listas antes de mostrar el formulario
 Update-Lists
 $form.ShowDialog()
-
-} else {
-    [System.Windows.Forms.MessageBox]::Show("No se pudo obtener el token de acceso.")
-}
