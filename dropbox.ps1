@@ -26,162 +26,150 @@ function Get-AccessToken {
 }
 
 # Obtener el token de acceso
-$global:accessToken = Get-AccessToken
-if (-not $global:accessToken) {
+token = Get-AccessToken
+if (-not $token) {
     [System.Windows.Forms.MessageBox]::Show("Error al obtener el token de acceso.")
     exit
 }
 
-# Variables globales
+$headers = @{ "Authorization" = "Bearer $token"; "Content-Type" = "application/json" }
+$global:downloadDirectory = ""
 $global:currentPath = ""
+$global:history = @()
+$global:downloadedFiles = @()
 $global:selectedFiles = @()
 
-# Función para listar archivos y carpetas
-function Load-DropboxContent {
-    param ($path)
-    $global:listBoxFolders.Items.Clear()
-    $global:currentPath = $path
-
-    if ($path -ne "") {
-        $global:listBoxFolders.Items.Add("...")
-    }
-
-    $headers = @{ "Authorization" = "Bearer $global:accessToken"; "Content-Type" = "application/json" }
-    $body = @{ path = $path } | ConvertTo-Json -Depth 10 -Compress
-    $url = "https://api.dropboxapi.com/2/files/list_folder"
-
-    try {
-        $response = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
-        if ($response.entries.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show("No se encontraron archivos en esta carpeta.")
-        } else {
-            foreach ($item in $response.entries) {
-                $global:listBoxFolders.Items.Add($item.name)
-            }
-        }
-    } catch {
-        [System.Windows.Forms.MessageBox]::Show("Error al cargar contenido de Dropbox: $($_.ErrorDetails)")
-    }
-}
-
-# Función para entrar a carpetas o seleccionar archivos
-function Enter-Item {
-    $selectedItem = $global:listBoxFolders.SelectedItem
-    if ($null -eq $selectedItem) { return }
-
-    if ($selectedItem -eq "...") {
-        $global:currentPath = ($global:currentPath -split "/")[0..($global:currentPath.Split("/").Count - 2)] -join "/"
-        Load-DropboxContent -path $global:currentPath
-        return
-    }
-
-    $headers = @{ "Authorization" = "Bearer $global:accessToken"; "Content-Type" = "application/json" }
-    $body = @{ path = "$global:currentPath/$selectedItem" } | ConvertTo-Json -Compress
-    $url = "https://api.dropboxapi.com/2/files/get_metadata"
-
-    try {
-        $response = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body
-        if ($response.".tag" -eq "folder") {
-            Load-DropboxContent -path "$global:currentPath/$selectedItem"
-        }
-    } catch {
-        [System.Windows.Forms.MessageBox]::Show("Error al acceder al ítem: $($_.ErrorDetails)")
-    }
-}
-
-# Función para agregar archivos a la lista de descargas
-function Move-ToDownloadList {
-    $selectedItem = $global:listBoxFolders.SelectedItem
-    if ($null -eq $selectedItem -or $selectedItem -eq "...") { return }
-    
-    $fullPath = "$global:currentPath/$selectedItem"
-
-    if (-not $global:selectedFiles.Contains($fullPath)) {
-        $global:selectedFiles += $fullPath
-        $global:listBoxDownloads.Items.Add($selectedItem)
-    }
-}
-
-# Función para eliminar archivos de la lista de descargas
-function Remove-FromDownloadList {
-    $selectedItem = $global:listBoxDownloads.SelectedItem
-    if ($null -eq $selectedItem) { return }
-
-    $global:selectedFiles = $global:selectedFiles | Where-Object { $_ -ne "$global:currentPath/$selectedItem" }
-    $global:listBoxDownloads.Items.Remove($selectedItem)
-}
-
-# Función para descargar archivos desde Dropbox
-function Download-Files {
-    if ($global:selectedFiles.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show("No hay archivos seleccionados para descargar.")
-        return
-    }
-
-    $downloadDialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    if ($downloadDialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
-    $localPath = $downloadDialog.SelectedPath
-
-    foreach ($file in $global:selectedFiles) {
-        $filePath = if ($file.StartsWith("/")) { $file } else { "/$file" }
-
-        $headers = @{ 
-            "Authorization" = "Bearer $global:accessToken"
-            "Dropbox-API-Arg" = ('{"path": "' + $filePath + '"}')
-        }
-        $url = "https://content.dropboxapi.com/2/files/download"
-        $localFilePath = Join-Path -Path $localPath -ChildPath (Split-Path -Leaf $filePath)
-
-        try {
-            Invoke-WebRequest -Uri $url -Method Post -Headers $headers -OutFile $localFilePath
-            [System.Windows.Forms.MessageBox]::Show("Archivo descargado: $localFilePath")
-        } catch {
-            [System.Windows.Forms.MessageBox]::Show("Error al descargar $filePath`n$($_.Exception.Message)")
-        }
-    }
-}
-
-# Crear formulario principal
+# Crear Formulario
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Explorador de Dropbox"
-$form.Size = New-Object System.Drawing.Size(800, 450)
+$form.Size = New-Object System.Drawing.Size(700, 500)
 
-# ListBox para mostrar carpetas y archivos
-$global:listBoxFolders = New-Object System.Windows.Forms.ListBox
-$global:listBoxFolders.Location = New-Object System.Drawing.Point(10, 10)
-$global:listBoxFolders.Size = New-Object System.Drawing.Size(350, 350)
-$global:listBoxFolders.Add_DoubleClick({ Enter-Item })
-$form.Controls.Add($global:listBoxFolders)
+# ListBox para carpetas
+$listBoxFolders = New-Object System.Windows.Forms.ListBox
+$listBoxFolders.Location = New-Object System.Drawing.Point(10, 10)
+$listBoxFolders.Size = New-Object System.Drawing.Size(200, 200)
+$form.Controls.Add($listBoxFolders)
 
-# Botón "Mover a esa ventana"
-$btnMove = New-Object System.Windows.Forms.Button
-$btnMove.Text = "Mover a esa ventana"
-$btnMove.Location = New-Object System.Drawing.Point(370, 10)
-$btnMove.Add_Click({ Move-ToDownloadList })
-$form.Controls.Add($btnMove)
+# ListBox para archivos
+$listBoxFiles = New-Object System.Windows.Forms.ListBox
+$listBoxFiles.Location = New-Object System.Drawing.Point(220, 10)
+$listBoxFiles.Size = New-Object System.Drawing.Size(200, 200)
+$form.Controls.Add($listBoxFiles)
 
 # ListBox para archivos seleccionados
-$global:listBoxDownloads = New-Object System.Windows.Forms.ListBox
-$global:listBoxDownloads.Location = New-Object System.Drawing.Point(500, 10)
-$global:listBoxDownloads.Size = New-Object System.Drawing.Size(250, 250)
-$form.Controls.Add($global:listBoxDownloads)
+$listBoxSelectedFiles = New-Object System.Windows.Forms.ListBox
+$listBoxSelectedFiles.Location = New-Object System.Drawing.Point(440, 10)
+$listBoxSelectedFiles.Size = New-Object System.Drawing.Size(200, 200)
+$form.Controls.Add($listBoxSelectedFiles)
 
-# Botón "Eliminar de lista"
-$btnRemove = New-Object System.Windows.Forms.Button
-$btnRemove.Text = "Eliminar"
-$btnRemove.Location = New-Object System.Drawing.Point(500, 270)
-$btnRemove.Add_Click({ Remove-FromDownloadList })
-$form.Controls.Add($btnRemove)
+# Botón para agregar archivos a la lista de descarga
+$btnAddToDownload = New-Object System.Windows.Forms.Button
+$btnAddToDownload.Text = "Agregar"
+$btnAddToDownload.Location = New-Object System.Drawing.Point(440, 220)
+$btnAddToDownload.Add_Click({
+    $selected = $listBoxFiles.SelectedItems
+    foreach ($file in $selected) {
+        if (-not $global:selectedFiles.Contains($file)) {
+            $global:selectedFiles += $file
+            $listBoxSelectedFiles.Items.Add($file)
+        }
+    }
+})
+$form.Controls.Add($btnAddToDownload)
 
-# Botón "Descargar"
-$btnDownload = New-Object System.Windows.Forms.Button
-$btnDownload.Text = "Descargar"
-$btnDownload.Location = New-Object System.Drawing.Point(500, 310)
-$btnDownload.Add_Click({ Download-Files })
-$form.Controls.Add($btnDownload)
+# Botón para eliminar archivos de la lista de descarga
+$btnRemoveFromDownload = New-Object System.Windows.Forms.Button
+$btnRemoveFromDownload.Text = "Eliminar"
+$btnRemoveFromDownload.Location = New-Object System.Drawing.Point(540, 220)
+$btnRemoveFromDownload.Add_Click({
+    $selected = $listBoxSelectedFiles.SelectedItems
+    foreach ($file in $selected) {
+        $global:selectedFiles = $global:selectedFiles | Where-Object { $_ -ne $file }
+        $listBoxSelectedFiles.Items.Remove($file)
+    }
+})
+$form.Controls.Add($btnRemoveFromDownload)
 
-# Cargar la raíz de Dropbox
-Load-DropboxContent -path ""
+# ListBox para mostrar estado de descargas
+$listBoxStatus = New-Object System.Windows.Forms.ListBox
+$listBoxStatus.Location = New-Object System.Drawing.Point(10, 220)
+$listBoxStatus.Size = New-Object System.Drawing.Size(410, 100)
+$form.Controls.Add($listBoxStatus)
 
-# Mostrar el formulario
+# Botón para seleccionar carpeta de descarga
+$btnSelectFolder = New-Object System.Windows.Forms.Button
+$btnSelectFolder.Text = "Seleccionar Carpeta"
+$btnSelectFolder.Location = New-Object System.Drawing.Point(10, 330)
+$btnSelectFolder.Add_Click({
+    $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    if ($folderDialog.ShowDialog() -eq "OK") {
+        $global:downloadDirectory = $folderDialog.SelectedPath
+        $listBoxStatus.Items.Add("Carpeta de descarga: $global:downloadDirectory")
+    }
+})
+$form.Controls.Add($btnSelectFolder)
+
+# Botón para descargar archivos seleccionados
+$btnDownloadFiles = New-Object System.Windows.Forms.Button
+$btnDownloadFiles.Text = "Descargar Archivos"
+$btnDownloadFiles.Location = New-Object System.Drawing.Point(150, 330)
+$btnDownloadFiles.Add_Click({
+    if ($global:downloadDirectory -eq "") {
+        [System.Windows.Forms.MessageBox]::Show("Seleccione una carpeta de descarga primero.")
+        return
+    }
+    
+    if ($global:selectedFiles.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show("Seleccione al menos un archivo.")
+        return
+    }
+
+    foreach ($file in $global:selectedFiles) {
+        Download-File $file
+    }
+
+    Show-SortDialog
+})
+$form.Controls.Add($btnDownloadFiles)
+
+# Función para actualizar listas
+function Update-Lists {
+    $listBoxFolders.Items.Clear()
+    $listBoxFiles.Items.Clear()
+    $listBoxStatus.Items.Clear()
+    
+    if ($global:currentPath -ne "") {
+        $listBoxFolders.Items.Add("...")
+    }
+    
+    $folders = Get-Folders
+    foreach ($folder in $folders) { 
+        $listBoxFolders.Items.Add($folder.name)
+    }
+    
+    $files = Get-Files
+    foreach ($file in $files) {
+        $listBoxFiles.Items.Add($file.name)
+    }
+}
+
+# Evento de doble clic para cambiar de carpeta
+$listBoxFolders.Add_DoubleClick({
+    if ($listBoxFolders.SelectedItem -eq "...") {
+        if ($global:history.Count -gt 0) {
+            $global:currentPath = $global:history[-1]
+            $global:history = $global:history[0..($global:history.Count - 2)]
+        } else {
+            $global:currentPath = ""
+        }
+    } else {
+        $global:history += $global:currentPath
+        $global:currentPath = "$global:currentPath/$($listBoxFolders.SelectedItem)"
+    }
+    Update-Lists
+})
+
+# Actualizar listas antes de mostrar el formulario
+Update-Lists
 $form.ShowDialog()
+
