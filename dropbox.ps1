@@ -98,8 +98,8 @@ function Download-DropboxFile($FilePath, $LocalPath) {
     $OutFilePath = Join-Path -Path $LocalPath -ChildPath $FileName
     
     try {
-        # Usamos Invoke-WebRequest en lugar de Invoke-RestMethod para manejar datos binarios
-        Invoke-WebRequest -Uri $Url -Method Post -Headers $Headers -OutFile $OutFilePath
+        # Se fuerza un body nulo y ContentType vacío para evitar error 400
+        Invoke-WebRequest -Uri $Url -Method Post -Headers $Headers -Body $null -ContentType "" -OutFile $OutFilePath -Verbose
         Debug-Print "Archivo descargado en: $OutFilePath"
     } catch {
         [System.Windows.Forms.MessageBox]::Show("Error al descargar archivo: $($_.Exception.Message)")
@@ -251,12 +251,18 @@ $downloadButton.Location = New-Object System.Drawing.Point(350, 350)
 Set-ButtonStyle $downloadButton
 
 $downloadButton.Add_Click({
-    foreach ($item in $selectedFilesBox.Items) {
-        $metadata = Get-DropboxMetadata $item
-        if ($metadata -and $metadata['.tag'] -eq "folder") {
-            Download-DropboxFolder $item (Join-Path $env:USERPROFILE "Downloads")
-        } else {
-            Download-DropboxFile $item (Join-Path $env:USERPROFILE "Downloads")
+    # Abrir diálogo para seleccionar carpeta de descarga
+    $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    if ($folderDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $chosenPath = $folderDialog.SelectedPath
+        Debug-Print "Carpeta elegida: $chosenPath"
+        foreach ($item in $selectedFilesBox.Items) {
+            $metadata = Get-DropboxMetadata $item
+            if ($metadata -and $metadata['.tag'] -eq "folder") {
+                Download-DropboxFolder $item $chosenPath
+            } else {
+                Download-DropboxFile $item $chosenPath
+            }
         }
     }
 })
@@ -264,7 +270,7 @@ $form.Controls.Add($downloadButton)
 
 # Variables globales para la ruta actual y entradas de Dropbox
 $global:currentPath = ""
-$global:dropboxEntries = @{}
+$global:dropboxEntries = @{ }
 
 # Función para actualizar la lista de archivos en la ventana izquierda
 function Update-FileList {
@@ -276,7 +282,7 @@ function Update-FileList {
     
     $entries = Get-DropboxFiles -Path $global:currentPath
     if ($entries) {
-        $global:dropboxEntries = @{}
+        $global:dropboxEntries = @{ }
         foreach ($entry in $entries) {
             if ($entry.name) {
                 $listBox.Items.Add($entry.name)
