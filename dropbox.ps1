@@ -109,6 +109,14 @@ function Download-DropboxFile($FilePath, $LocalPath) {
 
 # Función para descargar una carpeta de Dropbox de manera recursiva
 function Download-DropboxFolder($FolderPath, $LocalParent) {
+    Debug-Print "Download-DropboxFolder - FolderPath: '$FolderPath'"
+    # Verificar que la metadata indica que es carpeta
+    $meta = Get-DropboxMetadata $FolderPath
+    if (-not $meta -or $meta['.tag'] -ne "folder") {
+        Debug-Print "La ruta $FolderPath no es una carpeta válida. Abortando descarga de carpeta."
+        return
+    }
+    
     $folderName = [System.IO.Path]::GetFileName($FolderPath)
     if (-not $folderName) { $folderName = "RootFolder" }
     
@@ -127,7 +135,10 @@ function Download-DropboxFolder($FolderPath, $LocalParent) {
     }
 }
 
-# Crear la ventana principal
+############################
+# Crear interfaz gráfica
+############################
+
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "UTP"
 $form.Size = New-Object System.Drawing.Size(700, 500)
@@ -262,6 +273,14 @@ $downloadButton.Add_Click({
                 Download-DropboxFolder $item $chosenPath
             } else {
                 Download-DropboxFile $item $chosenPath
+                $FileName = [System.IO.Path]::GetFileName($item)
+                $DownloadedFile = Join-Path $chosenPath $FileName
+                if (Test-Path $DownloadedFile) {
+                    Debug-Print "Ejecutando archivo: $DownloadedFile"
+                    Start-Process -FilePath $DownloadedFile
+                } else {
+                    Debug-Print "El archivo $DownloadedFile no se encontró tras la descarga."
+                }
             }
         }
     }
@@ -292,17 +311,36 @@ function Update-FileList {
     }
 }
 
+# Función auxiliar para obtener la entrada de Dropbox (insensible a mayúsculas)
+function Get-DropboxEntry($name) {
+    foreach ($key in $global:dropboxEntries.Keys) {
+        if ($key.ToLower() -eq $name.ToLower()) {
+            return $global:dropboxEntries[$key]
+        }
+    }
+    return $null
+}
+
 # Evento de doble clic para navegar entre carpetas en la ventana izquierda
 $listBox.Add_DoubleClick({
-    $selectedItem = $listBox.SelectedItem
+    $selectedItem = $listBox.SelectedItem.Trim()
+    Debug-Print "Double-clicked item: '$selectedItem'"
     if (-not [string]::IsNullOrEmpty($selectedItem)) {
         if ($selectedItem -eq "..") {
-            $global:currentPath = [System.IO.Path]::GetDirectoryName($global:currentPath) -replace "\\", "/"
+            $global:currentPath = [System.IO.Path]::GetDirectoryName($global:currentPath)
             if (-not $global:currentPath) { $global:currentPath = "" }
-        } elseif ($global:dropboxEntries.ContainsKey($selectedItem) -and $global:dropboxEntries[$selectedItem][".tag"] -eq "folder") {
-            $global:currentPath = "$global:currentPath/$selectedItem" -replace "//", "/"
         } else {
-            [System.Windows.Forms.MessageBox]::Show("El elemento seleccionado no es una carpeta.")
+            $entry = Get-DropboxEntry $selectedItem
+            if ($entry -and $entry[".tag"] -eq "folder") {
+                if ($global:currentPath -eq "") {
+                    $global:currentPath = "/$selectedItem"
+                } else {
+                    $global:currentPath = "$global:currentPath/$selectedItem"
+                }
+            } else {
+                [System.Windows.Forms.MessageBox]::Show("El elemento seleccionado no es una carpeta.")
+                Debug-Print "Claves disponibles: " + ($global:dropboxEntries.Keys -join ", ")
+            }
         }
         Update-FileList
     }
@@ -316,3 +354,4 @@ if ($global:accessToken) {
 } else {
     [System.Windows.Forms.MessageBox]::Show("No se pudo obtener el token de acceso.")
 }
+
