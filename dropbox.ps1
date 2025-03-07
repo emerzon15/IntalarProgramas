@@ -1,16 +1,28 @@
 Add-Type -AssemblyName System.Windows.Forms
 
+# Habilitar mensajes de depuración
+$global:DebugMode = $true
+function Debug-Print($message) {
+    if ($global:DebugMode) { Write-Host "[DEBUG] $message" }
+}
+
 # Función para obtener el token de acceso
 function Get-AccessToken {
     $AppKey = "8g8oqwp5x26h58o"
     $AppSecret = "z3690pwzqowtzjx"
     $RefreshToken = "g8E8wsPIxW8AAAAAAAAAAUVpLeEobmxg1sWlIdufgjninvxJp2x4-YLIC53n6gNe"
 
-    $Body = @{ refresh_token = $RefreshToken; grant_type = "refresh_token"; client_id = $AppKey; client_secret = $AppSecret }
+    $Body = @{
+        refresh_token = $RefreshToken
+        grant_type    = "refresh_token"
+        client_id     = $AppKey
+        client_secret = $AppSecret
+    }
     $Headers = @{ "Content-Type" = "application/x-www-form-urlencoded" }
     $Url = "https://api.dropboxapi.com/oauth2/token"
     
     try {
+        Debug-Print "Obteniendo token desde: $Url"
         $Response = Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body
         return $Response.access_token
     } catch {
@@ -21,70 +33,240 @@ function Get-AccessToken {
 
 # Función para obtener la lista de archivos y carpetas de Dropbox
 function Get-DropboxFiles($Path) {
-    $Headers = @{ Authorization = "Bearer $global:accessToken"; "Content-Type" = "application/json" }
-    $Body = @{ path = $Path; recursive = $false; include_media_info = $false; include_deleted = $false } | ConvertTo-Json -Depth 10
+    if ($Path -eq "/") { $Path = "" }
+    $Headers = @{
+        Authorization = "Bearer $global:accessToken"
+        "Content-Type" = "application/json"
+    }
+    $Body = @{
+        path              = $Path
+        recursive         = $false
+        include_media_info = $false
+        include_deleted   = $false
+    } | ConvertTo-Json -Compress
     $Url = "https://api.dropboxapi.com/2/files/list_folder"
+    
+    Debug-Print "Get-DropboxFiles - Path: '$Path'"
+    Debug-Print "Request Body: $Body"
     
     try {
         $Response = Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body
         return $Response.entries
     } catch {
         [System.Windows.Forms.MessageBox]::Show("Error al obtener archivos: $($_.ErrorDetails.Message)")
+        Debug-Print "Error al obtener archivos: $($_.Exception.Message)"
         return $null
     }
 }
 
-# Función para descargar archivos desde Dropbox
-function Download-DropboxFile($FilePath) {
-    $FilePath = $FilePath.Trim()
-    if (-not $FilePath.StartsWith("/")) {
-        $FilePath = "/" + $FilePath
+# Función para obtener metadata de un elemento (archivo o carpeta)
+function Get-DropboxMetadata($Path) {
+    $Headers = @{
+        Authorization = "Bearer $global:accessToken"
+        "Content-Type" = "application/json"
     }
+    $Body = @{ path = $Path } | ConvertTo-Json -Compress
+    $Url = "https://api.dropboxapi.com/2/files/get_metadata"
     
-    $Headers = @{ Authorization = "Bearer $global:accessToken" }
-    $Headers["Dropbox-API-Arg"] = (@{ path = $FilePath } | ConvertTo-Json -Compress)
-    $Url = "https://content.dropboxapi.com/2/files/download"
-    $OutFilePath = Join-Path $env:USERPROFILE "Downloads" (Split-Path $FilePath -Leaf)
+    Debug-Print "Get-DropboxMetadata - Path: '$Path'"
+    Debug-Print "Request Body: $Body"
     
     try {
-        Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -OutFile $OutFilePath
-        [System.Windows.Forms.MessageBox]::Show("Descarga completada en: $OutFilePath")
+        $Response = Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body
+        return $Response
     } catch {
-        [System.Windows.Forms.MessageBox]::Show("Error al descargar archivo: $($_.Exception.Message)")
+        [System.Windows.Forms.MessageBox]::Show("Error al obtener metadata: $($_.Exception.Message)")
+        Debug-Print "Error al obtener metadata: $($_.Exception.Message)"
+        return $null
     }
 }
 
-# Crear la ventana
+# Función para descargar un archivo desde Dropbox (a una ruta local dada)
+function Download-DropboxFile($FilePath, $LocalPath) {
+    $Headers = @{ Authorization = "Bearer $global:accessToken" }
+    $Headers["Dropbox-API-Arg"] = (@{ path = $FilePath } | ConvertTo-Json -Compress)
+    $Url = "https://content.dropboxapi.com/2/files/download"
+    
+    Debug-Print "Download-DropboxFile - FilePath: '$FilePath'"
+    Debug-Print "Dropbox-API-Arg: $($Headers['Dropbox-API-Arg'])"
+    
+    $FileName = [System.IO.Path]::GetFileName($FilePath)
+    if (-not $FileName) {
+        [System.Windows.Forms.MessageBox]::Show("Error: Nombre de archivo no válido.")
+        return
+    }
+    $OutFilePath = Join-Path -Path $LocalPath -ChildPath $FileName
+    
+    try {
+        # Usamos Invoke-WebRequest en lugar de Invoke-RestMethod para manejar datos binarios
+        Invoke-WebRequest -Uri $Url -Method Post -Headers $Headers -OutFile $OutFilePath
+        Debug-Print "Archivo descargado en: $OutFilePath"
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Error al descargar archivo: $($_.Exception.Message)")
+        Debug-Print "Error al descargar archivo: $($_.Exception.Message)"
+    }
+}
+
+# Función para descargar una carpeta de Dropbox de manera recursiva
+function Download-DropboxFolder($FolderPath, $LocalParent) {
+    $folderName = [System.IO.Path]::GetFileName($FolderPath)
+    if (-not $folderName) { $folderName = "RootFolder" }
+    
+    $localFolderPath = Join-Path $LocalParent $folderName
+    if (!(Test-Path $localFolderPath)) {
+        New-Item -ItemType Directory -Path $localFolderPath | Out-Null
+    }
+    
+    $entries = Get-DropboxFiles -Path $FolderPath
+    foreach ($entry in $entries) {
+        if ($entry[".tag"] -eq "folder") {
+            Download-DropboxFolder $entry.path_lower $localFolderPath
+        } else {
+            Download-DropboxFile $entry.path_lower $localFolderPath
+        }
+    }
+}
+
+# Crear la ventana principal
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Explorador de Dropbox"
-$form.Size = New-Object System.Drawing.Size(500, 500)
+$form.Text = "UTP"
+$form.Size = New-Object System.Drawing.Size(700, 500)
 $form.StartPosition = "CenterScreen"
 
-# Lista para mostrar archivos y carpetas
+# Lista de archivos y carpetas (ventana izquierda)
 $listBox = New-Object System.Windows.Forms.ListBox
-$listBox.Dock = "Top"
-$listBox.Height = 400
+$listBox.Location = New-Object System.Drawing.Point(10, 10)
+$listBox.Size = New-Object System.Drawing.Size(300, 400)
 $form.Controls.Add($listBox)
 
-# Botón para descargar archivos
-$downloadButton = New-Object System.Windows.Forms.Button
-$downloadButton.Text = "Descargar"
-$downloadButton.Dock = "Bottom"
-$downloadButton.Add_Click({
+# Lista de elementos seleccionados (ventana derecha)
+$selectedFilesBox = New-Object System.Windows.Forms.ListBox
+$selectedFilesBox.Location = New-Object System.Drawing.Point(350, 10)
+$selectedFilesBox.Size = New-Object System.Drawing.Size(300, 350)
+$form.Controls.Add($selectedFilesBox)
+
+# Función auxiliar para dar estilo a los botones
+function Set-ButtonStyle($button) {
+    $button.BackColor  = [System.Drawing.Color]::Red
+    $button.ForeColor  = [System.Drawing.Color]::White
+    $button.FlatStyle  = [System.Windows.Forms.FlatStyle]::Flat
+    $button.FlatAppearance.BorderColor = [System.Drawing.Color]::Black
+    $button.FlatAppearance.BorderSize  = 1
+    $button.TextAlign  = [System.Drawing.ContentAlignment]::MiddleCenter
+}
+
+############################
+# Botones de agregar/eliminar (entre las listas)
+############################
+
+# Botón agregar (flecha derecha)
+$addButton = New-Object System.Windows.Forms.Button
+$addButton.Text = "→"
+$addButton.Size = New-Object System.Drawing.Size(30,30)
+$addButton.Location = New-Object System.Drawing.Point(320, 200)
+Set-ButtonStyle $addButton
+
+$addButton.Add_Click({
     $selectedItem = $listBox.SelectedItem
     if ($selectedItem -and $selectedItem -ne "..") {
-        $filePath = "$global:currentPath/$selectedItem" -replace "//", "/"
-        Download-DropboxFile -FilePath $filePath
-    } else {
-        [System.Windows.Forms.MessageBox]::Show("Seleccione un archivo válido para descargar.")
+        $entry = $global:dropboxEntries[$selectedItem]
+        if ($entry) {
+            $filePath = $entry.path_lower
+        } else {
+            $filePath = "$global:currentPath/$selectedItem" -replace "//", "/"
+        }
+        $exists = $false
+        foreach ($item in $selectedFilesBox.Items) {
+            if ([string]$item -eq $filePath) {
+                $exists = $true
+                break
+            }
+        }
+        if (-not $exists) {
+            $selectedFilesBox.Items.Add($filePath)
+        }
+    }
+})
+$form.Controls.Add($addButton)
+
+# Botón eliminar (flecha izquierda)
+$removeButton = New-Object System.Windows.Forms.Button
+$removeButton.Text = "←"
+$removeButton.Size = New-Object System.Drawing.Size(30,30)
+$removeButton.Location = New-Object System.Drawing.Point(320, 240)
+Set-ButtonStyle $removeButton
+
+$removeButton.Add_Click({
+    $selectedFilesBox.Items.Remove($selectedFilesBox.SelectedItem)
+})
+$form.Controls.Add($removeButton)
+
+############################
+# Botones de subir/bajar (a la derecha de la lista de seleccionados)
+############################
+
+# Botón subir (flecha arriba)
+$moveUpButton = New-Object System.Windows.Forms.Button
+$moveUpButton.Text = "↑"
+$moveUpButton.Size = New-Object System.Drawing.Size(30,30)
+$moveUpButton.Location = New-Object System.Drawing.Point(640, 200)
+Set-ButtonStyle $moveUpButton
+
+$moveUpButton.Add_Click({
+    $index = $selectedFilesBox.SelectedIndex
+    if ($index -gt 0) {
+        $item = $selectedFilesBox.Items[$index]
+        $selectedFilesBox.Items.RemoveAt($index)
+        $selectedFilesBox.Items.Insert($index - 1, $item)
+        $selectedFilesBox.SelectedIndex = $index - 1
+    }
+})
+$form.Controls.Add($moveUpButton)
+
+# Botón bajar (flecha abajo)
+$moveDownButton = New-Object System.Windows.Forms.Button
+$moveDownButton.Text = "↓"
+$moveDownButton.Size = New-Object System.Drawing.Size(30,30)
+$moveDownButton.Location = New-Object System.Drawing.Point(640, 240)
+Set-ButtonStyle $moveDownButton
+
+$moveDownButton.Add_Click({
+    $index = $selectedFilesBox.SelectedIndex
+    if ($index -lt ($selectedFilesBox.Items.Count - 1) -and $index -ge 0) {
+        $item = $selectedFilesBox.Items[$index]
+        $selectedFilesBox.Items.RemoveAt($index)
+        $selectedFilesBox.Items.Insert($index + 1, $item)
+        $selectedFilesBox.SelectedIndex = $index + 1
+    }
+})
+$form.Controls.Add($moveDownButton)
+
+############################
+# Botón de descargar y ejecutar
+############################
+$downloadButton = New-Object System.Windows.Forms.Button
+$downloadButton.Text = "Descargar y ejecutar"
+$downloadButton.Size = New-Object System.Drawing.Size(150,30)
+$downloadButton.Location = New-Object System.Drawing.Point(350, 350)
+Set-ButtonStyle $downloadButton
+
+$downloadButton.Add_Click({
+    foreach ($item in $selectedFilesBox.Items) {
+        $metadata = Get-DropboxMetadata $item
+        if ($metadata -and $metadata['.tag'] -eq "folder") {
+            Download-DropboxFolder $item (Join-Path $env:USERPROFILE "Downloads")
+        } else {
+            Download-DropboxFile $item (Join-Path $env:USERPROFILE "Downloads")
+        }
     }
 })
 $form.Controls.Add($downloadButton)
 
-# Variable global para la ruta actual en Dropbox
+# Variables globales para la ruta actual y entradas de Dropbox
 $global:currentPath = ""
+$global:dropboxEntries = @{}
 
-# Función para actualizar la lista de archivos
+# Función para actualizar la lista de archivos en la ventana izquierda
 function Update-FileList {
     $listBox.Items.Clear()
     
@@ -94,24 +276,30 @@ function Update-FileList {
     
     $entries = Get-DropboxFiles -Path $global:currentPath
     if ($entries) {
+        $global:dropboxEntries = @{}
         foreach ($entry in $entries) {
             if ($entry.name) {
                 $listBox.Items.Add($entry.name)
+                $global:dropboxEntries[$entry.name] = $entry
             }
         }
     }
 }
 
-# Evento de doble clic para navegar
+# Evento de doble clic para navegar entre carpetas en la ventana izquierda
 $listBox.Add_DoubleClick({
     $selectedItem = $listBox.SelectedItem
-    if ($selectedItem -eq "..") {
-        $global:currentPath = [System.IO.Path]::GetDirectoryName($global:currentPath) -replace "\\", "/"
-        if (-not $global:currentPath) { $global:currentPath = "" }
-    } else {
-        $global:currentPath = "$global:currentPath/$selectedItem" -replace "//", "/"
+    if (-not [string]::IsNullOrEmpty($selectedItem)) {
+        if ($selectedItem -eq "..") {
+            $global:currentPath = [System.IO.Path]::GetDirectoryName($global:currentPath) -replace "\\", "/"
+            if (-not $global:currentPath) { $global:currentPath = "" }
+        } elseif ($global:dropboxEntries.ContainsKey($selectedItem) -and $global:dropboxEntries[$selectedItem][".tag"] -eq "folder") {
+            $global:currentPath = "$global:currentPath/$selectedItem" -replace "//", "/"
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("El elemento seleccionado no es una carpeta.")
+        }
+        Update-FileList
     }
-    Update-FileList
 })
 
 # Obtener el token y cargar archivos
