@@ -256,8 +256,8 @@ $form.Controls.Add($moveDownButton)
 # Botón de descargar y ejecutar
 ############################
 $downloadButton= New-Object System.Windows.Forms.Button
-$downloadButton.Text= "Descargar y ejecutar"
-$downloadButton.Size= New-Object System.Drawing.Size(150,30)
+$downloadButton.Text="Descargar"
+$downloadButton.Size=New-Object System.Drawing.Size(150,30)
 $downloadButton.Location= New-Object System.Drawing.Point(350, 350)
 Set-ButtonStyle $downloadButton
 
@@ -339,7 +339,7 @@ $listBox.Add_DoubleClick({
                 }
             } else {
                 [System.Windows.Forms.MessageBox]::Show("El elemento seleccionado no es una carpeta.")
-                Debug-Print "Claves disponibles: " + ($global:dropboxEntries.Keys -join ",")
+                
             }
         }
         Update-FileList
