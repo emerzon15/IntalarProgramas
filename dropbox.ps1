@@ -1,4 +1,4 @@
-dd-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Windows.Forms
 
 # Habilitar mensajes de depuración
 $global:DebugMode = $true
@@ -39,10 +39,10 @@ function Get-DropboxFiles($Path) {
         "Content-Type" = "application/json"
     }
     $Body = @{
-        path              = $Path
-        recursive         = $false
+        path               = $Path
+        recursive          = $false
         include_media_info = $false
-        include_deleted   = $false
+        include_deleted    = $false
     } | ConvertTo-Json -Compress
     $Url = "https://api.dropboxapi.com/2/files/list_folder"
     
@@ -255,10 +255,10 @@ $form.Controls.Add($moveDownButton)
 ############################
 # Botón de descargar y ejecutar
 ############################
-$downloadButton= New-Object System.Windows.Forms.Button
-$downloadButton.Text="Descargar"
-$downloadButton.Size=New-Object System.Drawing.Size(150,30)
-$downloadButton.Location= New-Object System.Drawing.Point(350, 350)
+$downloadButton = New-Object System.Windows.Forms.Button
+$downloadButton.Text = "Descargar"
+$downloadButton.Size = New-Object System.Drawing.Size(150,30)
+$downloadButton.Location = New-Object System.Drawing.Point(350, 350)
 Set-ButtonStyle $downloadButton
 
 $downloadButton.Add_Click({
@@ -289,7 +289,7 @@ $form.Controls.Add($downloadButton)
 
 # Variables globales para la ruta actual y entradas de Dropbox
 $global:currentPath = ""
-$global:dropboxEntries = @{ }
+$global:dropboxEntries = @{}
 
 # Función para actualizar la lista de archivos en la ventana izquierda
 function Update-FileList {
@@ -301,7 +301,7 @@ function Update-FileList {
     
     $entries = Get-DropboxFiles -Path $global:currentPath
     if ($entries) {
-        $global:dropboxEntries = @{ }
+        $global:dropboxEntries = @{}
         foreach ($entry in $entries) {
             if ($entry.name) {
                 $listBox.Items.Add($entry.name)
@@ -339,7 +339,6 @@ $listBox.Add_DoubleClick({
                 }
             } else {
                 [System.Windows.Forms.MessageBox]::Show("El elemento seleccionado no es una carpeta.")
-                
             }
         }
         Update-FileList
@@ -351,4 +350,4 @@ $global:accessToken = Get-AccessToken
 if ($global:accessToken) {
     Update-FileList
     $form.ShowDialog()
-} 
+}
