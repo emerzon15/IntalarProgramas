@@ -354,4 +354,3 @@ if ($global:accessToken) {
 } else {
     [System.Windows.Forms.MessageBox]::Show("No se pudo obtener el token de acceso.")
 }
-
