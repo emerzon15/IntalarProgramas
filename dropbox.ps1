@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Windows.Forms
+dd-Type -AssemblyName System.Windows.Forms
 
 # Habilitar mensajes de depuración
 $global:DebugMode = $true
@@ -255,7 +255,7 @@ $form.Controls.Add($moveDownButton)
 ############################
 # Botón de descargar y ejecutar
 ############################
-$downloadButton = New-Object System.Windows.Forms.Button
+$downloadButton= New-Object System.Windows.Forms.Button
 $downloadButton.Text = "Descargar y ejecutar"
 $downloadButton.Size = New-Object System.Drawing.Size(150,30)
 $downloadButton.Location = New-Object System.Drawing.Point(350, 350)
@@ -351,6 +351,5 @@ $global:accessToken = Get-AccessToken
 if ($global:accessToken) {
     Update-FileList
     $form.ShowDialog()
-} else {
-    [System.Windows.Forms.MessageBox]::Show("No se pudo obtener el token de acceso.")
-}
+} 
+   
