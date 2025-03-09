@@ -1,7 +1,7 @@
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName Microsoft.VisualBasic
 
 # --- Definiciones para cambiar el color de la ProgressBar ---
-
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -48,7 +48,6 @@ function Get-AccessToken {
         $Response = Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body
         return $Response.access_token
     } catch {
-        [System.Windows.Forms.MessageBox]::Show("Error al renovar el token: $($_.Exception.Message)")
         return $null
     }
 }
@@ -74,7 +73,6 @@ function Get-DropboxFiles($Path) {
         $Response = Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body
         return $Response.entries
     } catch {
-        [System.Windows.Forms.MessageBox]::Show("Error al obtener archivos: $($_.ErrorDetails.Message)")
         Debug-Print "Error al obtener archivos: $($_.Exception.Message)"
         return $null
     }
@@ -95,19 +93,132 @@ function Get-DropboxMetadata($Path) {
         $Response = Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body
         return $Response
     } catch {
-        [System.Windows.Forms.MessageBox]::Show("Error al obtener metadata: $($_.Exception.Message)")
         Debug-Print "Error al obtener metadata: $($_.Exception.Message)"
         return $null
     }
 }
 
-# --- Descarga de archivos individuales con UI ---
+function Upload-DropboxFile($LocalFilePath, $DropboxDestinationFolder) {
+    $FileName = [System.IO.Path]::GetFileName($LocalFilePath)
+    if ([string]::IsNullOrEmpty($DropboxDestinationFolder) -or $DropboxDestinationFolder -eq "/") {
+        $DropboxPath = "/$FileName"
+    } else {
+        $DropboxPath = "$DropboxDestinationFolder/$FileName"
+    }
+    $Url = "https://content.dropboxapi.com/2/files/upload"
+    $Headers = @{
+         "Authorization" = "Bearer $global:accessToken"
+         "Dropbox-API-Arg" = (ConvertTo-Json -Compress @{
+            path = $DropboxPath
+            mode = "add"
+            autorename = $true
+            mute = $false
+            strict_conflict = $false
+         })
+         "Content-Type" = "application/octet-stream"
+    }
+    try {
+         Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -InFile $LocalFilePath -ContentType "application/octet-stream" | Out-Null
+         return $true
+    } catch {
+         Debug-Print "Error al subir archivo: $($_.Exception.Message)"
+         return $false
+    }
+}
+
+function Upload-DropboxFolder($LocalFolderPath, $DropboxDestinationFolder) {
+    $FolderName = [System.IO.Path]::GetFileName($LocalFolderPath)
+    if ([string]::IsNullOrEmpty($DropboxDestinationFolder) -or $DropboxDestinationFolder -eq "/") {
+        $DropboxFolderPath = "/$FolderName"
+    } else {
+        $DropboxFolderPath = "$DropboxDestinationFolder/$FolderName"
+    }
+    # Crear carpeta en Dropbox
+    $Url = "https://api.dropboxapi.com/2/files/create_folder_v2"
+    $Headers = @{
+         "Authorization" = "Bearer $global:accessToken"
+         "Content-Type"  = "application/json"
+    }
+    $Body = @{
+         path = $DropboxFolderPath
+         autorename = $true
+    } | ConvertTo-Json -Compress
+    try {
+         Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body | Out-Null
+    } catch {
+         Debug-Print "Error al crear carpeta (posiblemente ya exista): $($_.Exception.Message)"
+    }
+    # Subir archivos inmediatos
+    Get-ChildItem -Path $LocalFolderPath -File | ForEach-Object {
+         Upload-DropboxFile $_.FullName $DropboxFolderPath | Out-Null
+    }
+    # Procesar subcarpetas de forma recursiva
+    Get-ChildItem -Path $LocalFolderPath -Directory | ForEach-Object {
+         Upload-DropboxFolder $_.FullName $DropboxFolderPath
+    }
+}
+
+function Copy-DropboxItem($fromPath, $toPath) {
+    $Headers = @{
+        Authorization = "Bearer $global:accessToken"
+        "Content-Type" = "application/json"
+    }
+    $Body = @{
+        from_path = $fromPath
+        to_path   = $toPath
+        autorename = $true
+    } | ConvertTo-Json -Compress
+    $Url = "https://api.dropboxapi.com/2/files/copy_v2"
+    try {
+        Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body | Out-Null
+        return $true
+    } catch {
+        Debug-Print "Error al copiar: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Move-DropboxItem($fromPath, $toPath) {
+    $Headers = @{
+        Authorization = "Bearer $global:accessToken"
+        "Content-Type" = "application/json"
+    }
+    $Body = @{
+        from_path = $fromPath
+        to_path   = $toPath
+        autorename = $true
+    } | ConvertTo-Json -Compress
+    $Url = "https://api.dropboxapi.com/2/files/move_v2"
+    try {
+        Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body | Out-Null
+        return $true
+    } catch {
+        Debug-Print "Error al mover: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Delete-DropboxItem($path) {
+    $Headers = @{
+        Authorization = "Bearer $global:accessToken"
+        "Content-Type" = "application/json"
+    }
+    $Body = @{ path = $path } | ConvertTo-Json -Compress
+    $Url = "https://api.dropboxapi.com/2/files/delete_v2"
+    try {
+        Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body | Out-Null
+        return $true
+    } catch {
+        Debug-Print "Error al eliminar: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Download-DropboxFileWithProgress($FilePath, $LocalPath, $parentPanel, [bool]$ExecuteAfterDownload = $true) {
     $FileName = [System.IO.Path]::GetFileName($FilePath)
     if (-not $FileName) { return $false }
     $OutFilePath = Join-Path -Path $LocalPath -ChildPath $FileName
 
-    # Crear panel para este archivo
     $panel = New-Object System.Windows.Forms.Panel
     $panel.Size = New-Object System.Drawing.Size(([int]$parentPanel.Width - 10), 40)
     $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
@@ -191,7 +302,6 @@ function Download-DropboxFileWithProgress($FilePath, $LocalPath, $parentPanel, [
     }
 }
 
-# --- Descarga de archivos sin UI (para uso interno en descargas de carpetas) ---
 function Download-DropboxFileSilent($FilePath, $LocalPath, [bool]$ExecuteAfterDownload = $true) {
     $FileName = [System.IO.Path]::GetFileName($FilePath)
     if (-not $FileName) { return $false }
@@ -227,7 +337,6 @@ function Download-DropboxFileSilent($FilePath, $LocalPath, [bool]$ExecuteAfterDo
     return -not $errorOccurred
 }
 
-# --- Descarga de carpeta (único progreso para toda la carpeta) ---
 function Download-DropboxFolder($FolderPath, $LocalParent) {
     Debug-Print "Download-DropboxFolder - FolderPath: '$FolderPath'"
     $meta = Get-DropboxMetadata $FolderPath
@@ -241,7 +350,6 @@ function Download-DropboxFolder($FolderPath, $LocalParent) {
     $localFolderPath = Join-Path $LocalParent $folderName
     if (!(Test-Path $localFolderPath)) { New-Item -ItemType Directory -Path $localFolderPath | Out-Null }
     
-    # Función interna para recopilar archivos de forma recursiva
     $allFiles = @()
     function Get-AllFiles($path) {
         $entries = Get-DropboxFiles -Path $path
@@ -260,7 +368,6 @@ function Download-DropboxFolder($FolderPath, $LocalParent) {
         return
     }
     
-    # Crear un panel único para la carpeta
     $panel = New-Object System.Windows.Forms.Panel
     $panel.Size = New-Object System.Drawing.Size(680, 40)
     $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
@@ -290,7 +397,6 @@ function Download-DropboxFolder($FolderPath, $LocalParent) {
     $global:downloadStatusPanel.Controls.Add($panel)
     $global:downloadStatusPanel.Refresh()
 
-    # Descargar archivos secuencialmente sin UI individual
     $filesDownloaded = 0
     foreach ($file in $allFiles) {
          $result = Download-DropboxFileSilent $file $localFolderPath $false
@@ -312,14 +418,23 @@ $form.Text = "UTP"
 $form.Size = New-Object System.Drawing.Size(700, 650)
 $form.StartPosition = "CenterScreen"
 
-$listBox = New-Object System.Windows.Forms.ListBox
-$listBox.Location = New-Object System.Drawing.Point(10, 10)
-$listBox.Size = New-Object System.Drawing.Size(300, 400)
-$form.Controls.Add($listBox)
+$fileListView = New-Object System.Windows.Forms.ListView
+$fileListView.Location = New-Object System.Drawing.Point(10,10)
+$fileListView.Size = New-Object System.Drawing.Size(300,400)
+$fileListView.View = [System.Windows.Forms.View]::List
+
+$imageList = New-Object System.Windows.Forms.ImageList
+$folderIcon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\Windows\explorer.exe").ToBitmap()
+$fileIcon = [System.Drawing.SystemIcons]::Information.ToBitmap()
+$imageList.Images.Add("folder", $folderIcon)
+$imageList.Images.Add("file", $fileIcon)
+
+$fileListView.SmallImageList = $imageList
+$form.Controls.Add($fileListView)
 
 $selectedFilesBox = New-Object System.Windows.Forms.ListBox
-$selectedFilesBox.Location = New-Object System.Drawing.Point(350, 10)
-$selectedFilesBox.Size = New-Object System.Drawing.Size(300, 350)
+$selectedFilesBox.Location = New-Object System.Drawing.Point(350,10)
+$selectedFilesBox.Size = New-Object System.Drawing.Size(300,350)
 $form.Controls.Add($selectedFilesBox)
 
 function Set-ButtonStyle($button) {
@@ -334,27 +449,29 @@ function Set-ButtonStyle($button) {
 $addButton = New-Object System.Windows.Forms.Button
 $addButton.Text = "→"
 $addButton.Size = New-Object System.Drawing.Size(30,30)
-$addButton.Location = New-Object System.Drawing.Point(320, 200)
+$addButton.Location = New-Object System.Drawing.Point(320,200)
 Set-ButtonStyle $addButton
 $addButton.Add_Click({
-    $selectedItem = $listBox.SelectedItem
-    if ($selectedItem -and $selectedItem -ne "..") {
-        $entry = $global:dropboxEntries[$selectedItem]
-        if ($entry) {
-            $filePath = $entry.path_lower
-        } else {
-            $filePath = "$global:currentPath/$selectedItem" -replace "//", "/"
-        }
-        $exists = $false
-        foreach ($item in $selectedFilesBox.Items) {
-            if ([string]$item -eq $filePath) {
-                $exists = $true
-                break
-            }
-        }
-        if (-not $exists) {
-            $selectedFilesBox.Items.Add($filePath)
-        }
+    if ($fileListView.SelectedItems.Count -gt 0) {
+         $selectedItem = $fileListView.SelectedItems[0].Text
+         if ($selectedItem -and $selectedItem -ne "..") {
+             $entry = $global:dropboxEntries[$selectedItem]
+             if ($entry) {
+                 $filePath = $entry.path_lower
+             } else {
+                 $filePath = "$global:currentPath/$selectedItem" -replace "//", "/"
+             }
+             $exists = $false
+             foreach ($item in $selectedFilesBox.Items) {
+                 if ([string]$item -eq $filePath) {
+                     $exists = $true
+                     break
+                 }
+             }
+             if (-not $exists) {
+                 $selectedFilesBox.Items.Add($filePath)
+             }
+         }
     }
 })
 $form.Controls.Add($addButton)
@@ -362,7 +479,7 @@ $form.Controls.Add($addButton)
 $removeButton = New-Object System.Windows.Forms.Button
 $removeButton.Text = "←"
 $removeButton.Size = New-Object System.Drawing.Size(30,30)
-$removeButton.Location = New-Object System.Drawing.Point(320, 240)
+$removeButton.Location = New-Object System.Drawing.Point(320,240)
 Set-ButtonStyle $removeButton
 $removeButton.Add_Click({
     $selectedFilesBox.Items.Remove($selectedFilesBox.SelectedItem)
@@ -372,7 +489,7 @@ $form.Controls.Add($removeButton)
 $moveUpButton = New-Object System.Windows.Forms.Button
 $moveUpButton.Text = "↑"
 $moveUpButton.Size = New-Object System.Drawing.Size(30,30)
-$moveUpButton.Location = New-Object System.Drawing.Point(640, 200)
+$moveUpButton.Location = New-Object System.Drawing.Point(640,200)
 Set-ButtonStyle $moveUpButton
 $moveUpButton.Add_Click({
     $index = $selectedFilesBox.SelectedIndex
@@ -388,7 +505,7 @@ $form.Controls.Add($moveUpButton)
 $moveDownButton = New-Object System.Windows.Forms.Button
 $moveDownButton.Text = "↓"
 $moveDownButton.Size = New-Object System.Drawing.Size(30,30)
-$moveDownButton.Location = New-Object System.Drawing.Point(640, 240)
+$moveDownButton.Location = New-Object System.Drawing.Point(640,240)
 Set-ButtonStyle $moveDownButton
 $moveDownButton.Add_Click({
     $index = $selectedFilesBox.SelectedIndex
@@ -402,8 +519,8 @@ $moveDownButton.Add_Click({
 $form.Controls.Add($moveDownButton)
 
 $downloadStatusPanel = New-Object System.Windows.Forms.FlowLayoutPanel
-$downloadStatusPanel.Location = New-Object System.Drawing.Point(10, 420)
-$downloadStatusPanel.Size = New-Object System.Drawing.Size(680, 180)
+$downloadStatusPanel.Location = New-Object System.Drawing.Point(10,420)
+$downloadStatusPanel.Size = New-Object System.Drawing.Size(680,180)
 $downloadStatusPanel.AutoScroll = $true
 $form.Controls.Add($downloadStatusPanel)
 $global:downloadStatusPanel = $downloadStatusPanel
@@ -411,7 +528,7 @@ $global:downloadStatusPanel = $downloadStatusPanel
 $downloadButton = New-Object System.Windows.Forms.Button
 $downloadButton.Text = "Descargar"
 $downloadButton.Size = New-Object System.Drawing.Size(150,30)
-$downloadButton.Location = New-Object System.Drawing.Point(350, 360)
+$downloadButton.Location = New-Object System.Drawing.Point(350,360)
 Set-ButtonStyle $downloadButton
 $downloadButton.Add_Click({
     $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -431,19 +548,223 @@ $downloadButton.Add_Click({
 })
 $form.Controls.Add($downloadButton)
 
+# --- Botón para subir archivos y carpetas (reemplazando el MessageBox) ---
+$uploadButton = New-Object System.Windows.Forms.Button
+$uploadButton.Text = "Subir"
+$uploadButton.Size = New-Object System.Drawing.Size(150,30)
+$uploadButton.Location = New-Object System.Drawing.Point(350,400)
+Set-ButtonStyle $uploadButton
+$uploadButton.Add_Click({
+
+    # Creamos un formulario pequeño para elegir si subir Archivo o Carpeta
+    $uploadForm = New-Object System.Windows.Forms.Form
+    $uploadForm.Text = "Seleccionar tipo de subida"
+    $uploadForm.Size = New-Object System.Drawing.Size(300,150)
+    $uploadForm.StartPosition = "CenterParent"
+    $uploadForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $uploadForm.MaximizeBox = $false
+    $uploadForm.MinimizeBox = $false
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = "¿Qué desea subir?"
+    $lbl.AutoSize = $true
+    $lbl.Location = New-Object System.Drawing.Point(10,10)
+    $uploadForm.Controls.Add($lbl)
+
+    $btnArchivo = New-Object System.Windows.Forms.Button
+    $btnArchivo.Text = "Archivo"
+    $btnArchivo.Size = New-Object System.Drawing.Size(70,30)
+    $btnArchivo.Location = New-Object System.Drawing.Point(10,50)
+    $btnArchivo.Add_Click({
+        $uploadForm.Tag = "file"
+        $uploadForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $uploadForm.Close()
+    })
+    $uploadForm.Controls.Add($btnArchivo)
+
+    $btnCarpeta = New-Object System.Windows.Forms.Button
+    $btnCarpeta.Text = "Carpeta"
+    $btnCarpeta.Size = New-Object System.Drawing.Size(70,30)
+    $btnCarpeta.Location = New-Object System.Drawing.Point(90,50)
+    $btnCarpeta.Add_Click({
+        $uploadForm.Tag = "folder"
+        $uploadForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $uploadForm.Close()
+    })
+    $uploadForm.Controls.Add($btnCarpeta)
+
+    $btnCancelar = New-Object System.Windows.Forms.Button
+    $btnCancelar.Text = "Cancelar"
+    $btnCancelar.Size = New-Object System.Drawing.Size(70,30)
+    $btnCancelar.Location = New-Object System.Drawing.Point(170,50)
+    $btnCancelar.Add_Click({
+        $uploadForm.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $uploadForm.Close()
+    })
+    $uploadForm.Controls.Add($btnCancelar)
+
+    $dialogResult = $uploadForm.ShowDialog($form)
+
+    # Si el usuario eligió Archivo o Carpeta:
+    if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) {
+        $option = $uploadForm.Tag
+        if ($option -eq "file") {
+            $fileDialog = New-Object System.Windows.Forms.OpenFileDialog
+            $fileDialog.Multiselect = $true
+            if ($fileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                foreach ($file in $fileDialog.FileNames) {
+                    Upload-DropboxFile $file $global:currentPath | Out-Null
+                }
+                Update-FileList
+            }
+        } elseif ($option -eq "folder") {
+            $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+            if ($folderDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                Upload-DropboxFolder $folderDialog.SelectedPath $global:currentPath
+                Update-FileList
+            }
+        }
+    }
+})
+$form.Controls.Add($uploadButton)
+
+# --- Botón para crear carpetas ---
+$createFolderButton = New-Object System.Windows.Forms.Button
+$createFolderButton.Text = "Crear carpeta"
+$createFolderButton.Size = New-Object System.Drawing.Size(150,30)
+$createFolderButton.Location = New-Object System.Drawing.Point(510,400)
+Set-ButtonStyle $createFolderButton
+$createFolderButton.Add_Click({
+    $folderName = [Microsoft.VisualBasic.Interaction]::InputBox("Ingrese el nombre de la nueva carpeta", "Crear carpeta", "Nueva carpeta")
+    if ($folderName -ne "") {
+         if ([string]::IsNullOrEmpty($global:currentPath) -or $global:currentPath -eq "/") {
+             $DropboxFolderPath = "/$folderName"
+         } else {
+             $DropboxFolderPath = "$global:currentPath/$folderName"
+         }
+         $Url = "https://api.dropboxapi.com/2/files/create_folder_v2"
+         $Headers = @{
+             Authorization = "Bearer $global:accessToken"
+             "Content-Type"  = "application/json"
+         }
+         $Body = @{
+             path = $DropboxFolderPath
+             autorename = $true
+         } | ConvertTo-Json -Compress
+         try {
+             Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -Body $Body | Out-Null
+             Update-FileList
+         } catch {
+             Debug-Print "Error al crear carpeta: $($_.Exception.Message)"
+         }
+    }
+})
+$form.Controls.Add($createFolderButton)
+
+$global:clipboardItem = $null
+$global:clipboardOperation = $null
+
+$contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$menuCopy = New-Object System.Windows.Forms.ToolStripMenuItem("Copiar")
+$menuCut = New-Object System.Windows.Forms.ToolStripMenuItem("Cortar")
+$menuPaste = New-Object System.Windows.Forms.ToolStripMenuItem("Pegar")
+$menuDelete = New-Object System.Windows.Forms.ToolStripMenuItem("Eliminar")
+$contextMenu.Items.Add($menuCopy)
+$contextMenu.Items.Add($menuCut)
+$contextMenu.Items.Add($menuPaste)
+$contextMenu.Items.Add($menuDelete)
+$fileListView.ContextMenuStrip = $contextMenu
+
+$menuCopy.Add_Click({
+    if ($fileListView.SelectedItems.Count -gt 0) {
+         $selectedItem = $fileListView.SelectedItems[0].Text
+         if ($selectedItem -and $selectedItem -ne "..") {
+             $entry = $global:dropboxEntries[$selectedItem]
+             if ($entry) {
+                 $global:clipboardItem = $entry.path_lower
+             } else {
+                 $global:clipboardItem = "$global:currentPath/$selectedItem" -replace "//", "/"
+             }
+             $global:clipboardOperation = "copy"
+         }
+    }
+})
+
+$menuCut.Add_Click({
+    if ($fileListView.SelectedItems.Count -gt 0) {
+         $selectedItem = $fileListView.SelectedItems[0].Text
+         if ($selectedItem -and $selectedItem -ne "..") {
+             $entry = $global:dropboxEntries[$selectedItem]
+             if ($entry) {
+                 $global:clipboardItem = $entry.path_lower
+             } else {
+                 $global:clipboardItem = "$global:currentPath/$selectedItem" -replace "//", "/"
+             }
+             $global:clipboardOperation = "cut"
+         }
+    }
+})
+
+$menuPaste.Add_Click({
+    if ($global:clipboardItem) {
+         $destination = if ([string]::IsNullOrEmpty($global:currentPath) -or $global:currentPath -eq "/") {
+             "/$([System.IO.Path]::GetFileName($global:clipboardItem))"
+         } else {
+             "$global:currentPath/$([System.IO.Path]::GetFileName($global:clipboardItem))"
+         }
+         if ($global:clipboardOperation -eq "copy") {
+             $result = Copy-DropboxItem $global:clipboardItem $destination
+         } elseif ($global:clipboardOperation -eq "cut") {
+             $result = Move-DropboxItem $global:clipboardItem $destination
+         }
+         if ($result) {
+             Update-FileList
+             $global:clipboardItem = $null
+             $global:clipboardOperation = $null
+         }
+    }
+})
+
+$menuDelete.Add_Click({
+    if ($fileListView.SelectedItems.Count -gt 0) {
+         $selectedItem = $fileListView.SelectedItems[0].Text
+         if ($selectedItem -and $selectedItem -ne "..") {
+             $entry = $global:dropboxEntries[$selectedItem]
+             if ($entry) {
+                 $pathToDelete = $entry.path_lower
+             } else {
+                 $pathToDelete = "$global:currentPath/$selectedItem" -replace "//", "/"
+             }
+             if (Delete-DropboxItem $pathToDelete) {
+                 Update-FileList
+             }
+         }
+    }
+})
+
 $global:currentPath = ""
 $global:dropboxEntries = @{}
 
 function Update-FileList {
     if ($global:currentPath -eq "/") { $global:currentPath = "" }
-    $listBox.Items.Clear()
-    if ($global:currentPath -ne "") { $listBox.Items.Add("..") }
+    $fileListView.Items.Clear()
+    if ($global:currentPath -ne "") {
+         $upItem = New-Object System.Windows.Forms.ListViewItem("..")
+         $upItem.ImageKey = "folder"
+         $fileListView.Items.Add($upItem)
+    }
     $entries = Get-DropboxFiles -Path $global:currentPath
     if ($entries) {
         $global:dropboxEntries = @{}
         foreach ($entry in $entries) {
             if ($entry.name) {
-                $listBox.Items.Add($entry.name)
+                $lvi = New-Object System.Windows.Forms.ListViewItem($entry.name)
+                if ($entry.PSObject.Properties[".tag"].Value -eq "folder") {
+                    $lvi.ImageKey = "folder"
+                } else {
+                    $lvi.ImageKey = "file"
+                }
+                $fileListView.Items.Add($lvi)
                 $global:dropboxEntries[$entry.name] = $entry
             }
         }
@@ -459,35 +780,35 @@ function Get-DropboxEntry($name) {
     return $null
 }
 
-$listBox.Add_DoubleClick({
-    $selectedItem = ([string]::Concat($listBox.SelectedItem)).Trim()
-    Debug-Print "Double-clicked item: '$selectedItem'"
-    if (-not [string]::IsNullOrEmpty($selectedItem)) {
-        if ($selectedItem -eq "..") {
-            if ([string]::IsNullOrEmpty($global:currentPath) -or $global:currentPath -eq "/") {
-                $global:currentPath = ""
-            } else {
-                $segments = $global:currentPath.Trim("/").Split("/")
-                if ($segments.Length -gt 1) {
-                    $global:currentPath = "/" + ($segments[0..($segments.Length - 2)] -join "/")
-                } else {
-                    $global:currentPath = ""
-                }
-            }
-        } else {
-            $entry = Get-DropboxEntry $selectedItem
-            if ($entry -and $entry.PSObject.Properties[".tag"].Value -eq "folder") {
-                if ([string]::IsNullOrEmpty($global:currentPath) -or $global:currentPath -eq "/") {
-                    $global:currentPath = "/" + $selectedItem
-                } else {
-                    $global:currentPath = $global:currentPath + "/" + $selectedItem
-                }
-            } else {
-                [System.Windows.Forms.MessageBox]::Show("El elemento seleccionado no es una carpeta.")
-            }
-        }
-        Debug-Print "New currentPath: '$global:currentPath'"
-        Update-FileList
+$fileListView.Add_DoubleClick({
+    if ($fileListView.SelectedItems.Count -gt 0) {
+         $selectedItem = $fileListView.SelectedItems[0].Text
+         Debug-Print "Double-clicked item: '$selectedItem'"
+         if (-not [string]::IsNullOrEmpty($selectedItem)) {
+             if ($selectedItem -eq "..") {
+                 if ([string]::IsNullOrEmpty($global:currentPath) -or $global:currentPath -eq "/") {
+                     $global:currentPath = ""
+                 } else {
+                     $segments = $global:currentPath.Trim("/").Split("/")
+                     if ($segments.Length -gt 1) {
+                         $global:currentPath = "/" + ($segments[0..($segments.Length - 2)] -join "/")
+                     } else {
+                         $global:currentPath = ""
+                     }
+                 }
+             } else {
+                 $entry = Get-DropboxEntry $selectedItem
+                 if ($entry -and $entry.PSObject.Properties[".tag"].Value -eq "folder") {
+                     if ([string]::IsNullOrEmpty($global:currentPath) -or $global:currentPath -eq "/") {
+                         $global:currentPath = "/" + $selectedItem
+                     } else {
+                         $global:currentPath = $global:currentPath + "/" + $selectedItem
+                     }
+                 }
+             }
+             Debug-Print "New currentPath: '$global:currentPath'"
+             Update-FileList
+         }
     }
 })
 
