@@ -20,6 +20,43 @@ public static class ThemeHelper {
 "@
 $PBM_SETBARCOLOR = 0x409
 
+# --- Añadimos funciones para obtener el ícono asociado a una extensión ---
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class ShellIcon {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SHFILEINFO {
+        public IntPtr hIcon;
+        public int iIcon;
+        public uint dwAttributes;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szDisplayName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
+        public string szTypeName;
+    };
+
+    public const uint SHGFI_ICON = 0x100;
+    public const uint SHGFI_SMALLICON = 0x1;
+
+    [DllImport("shell32.dll")]
+    public static extern IntPtr SHGetFileInfo(string pszPath, uint dwFileAttributes,
+        ref SHFILEINFO psfi, uint cbFileInfo, uint uFlags);
+}
+"@
+
+function Get-FileIcon {
+    param([string]$filePath)
+    $shinfo = New-Object ShellIcon+SHFILEINFO
+    $size = [System.Runtime.InteropServices.Marshal]::SizeOf($shinfo)
+    $flags = [ShellIcon]::SHGFI_ICON -bor [ShellIcon]::SHGFI_SMALLICON
+    [ShellIcon]::SHGetFileInfo($filePath, 0, [ref]$shinfo, $size, $flags) | Out-Null
+    $icon = [System.Drawing.Icon]::FromHandle($shinfo.hIcon)
+    $bitmap = $icon.ToBitmap()
+    [System.Runtime.InteropServices.Marshal]::DestroyIcon($shinfo.hIcon) | Out-Null
+    return $bitmap
+}
+
 # --- Depuración ---
 $global:DebugMode = $true
 function Debug-Print($message) {
@@ -409,16 +446,21 @@ $form.Text = "UTP"
 $form.Size = New-Object System.Drawing.Size(900,600)
 $form.StartPosition = "CenterScreen"
 
+# Creamos el ImageList y agregamos el ícono para carpetas
+$imageList = New-Object System.Windows.Forms.ImageList
+$folderIcon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\Windows\explorer.exe").ToBitmap()
+$imageList.Images.Add("folder", $folderIcon)
+# Opcional: ícono por defecto para archivos si no se encuentra según extensión
+if (-not $imageList.Images.ContainsKey("file")) {
+    $defaultFileIcon = [System.Drawing.SystemIcons]::Information.ToBitmap()
+    $imageList.Images.Add("file", $defaultFileIcon)
+}
+
 # ListView (izquierda) para mostrar archivos/carpetas de Dropbox
 $fileListView = New-Object System.Windows.Forms.ListView
 $fileListView.Location = New-Object System.Drawing.Point(10,10)
 $fileListView.Size = New-Object System.Drawing.Size(350,400)
 $fileListView.View = [System.Windows.Forms.View]::List
-$imageList = New-Object System.Windows.Forms.ImageList
-$folderIcon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\Windows\explorer.exe").ToBitmap()
-$fileIcon   = [System.Drawing.SystemIcons]::Information.ToBitmap()
-$imageList.Images.Add("folder", $folderIcon)
-$imageList.Images.Add("file", $fileIcon)
 $fileListView.SmallImageList = $imageList
 $form.Controls.Add($fileListView)
 
@@ -726,7 +768,7 @@ function Update-FileList {
         $fileListView.Items.Add($upItem)
     }
     # Se obtiene y ordena la lista de archivos y carpetas:
-    # Primero se colocan las carpetas (valor 0) y luego los archivos (valor 1), ambos ordenados alfabéticamente por su nombre.
+    # Primero se colocan las carpetas (valor 0) y luego los archivos (valor 1), ambos ordenados alfabéticamente.
     $entries = Get-DropboxFiles -Path $global:currentPath | Sort-Object -Property { if($_.PSObject.Properties[".tag"].Value -eq "folder") { 0 } else { 1 } }, name
     if ($entries) {
         $global:dropboxEntries = @{}
@@ -736,7 +778,20 @@ function Update-FileList {
                 if ($entry.PSObject.Properties[".tag"].Value -eq "folder") {
                     $lvi.ImageKey = "folder"
                 } else {
-                    $lvi.ImageKey = "file"
+                    # Para archivos, obtenemos la extensión y usamos el ícono asociado
+                    $ext = [System.IO.Path]::GetExtension($entry.name).ToLower()
+                    if ([string]::IsNullOrEmpty($ext)) { $ext = "file" }
+                    if (-not $imageList.Images.ContainsKey($ext)) {
+                        try {
+                            # Se utiliza un nombre ficticio para extraer el ícono asociado a la extensión
+                            $dummyFile = "dummy" + $ext
+                            $iconBmp = Get-FileIcon -filePath $dummyFile
+                            $imageList.Images.Add($ext, $iconBmp)
+                        } catch {
+                            $ext = "file"
+                        }
+                    }
+                    $lvi.ImageKey = $ext
                 }
                 $fileListView.Items.Add($lvi)
                 $global:dropboxEntries[$entry.name] = $entry
