@@ -1,3 +1,9 @@
+# ===============================================================
+# ====================== INICIO DEL CÓDIGO ======================
+# ====================== DISEÑADO POR E.C. ======================
+# ===============================================================
+
+# Cargar ensamblados necesarios
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName Microsoft.VisualBasic
 
@@ -20,7 +26,7 @@ public static class ThemeHelper {
 "@
 $PBM_SETBARCOLOR = 0x409
 
-# --- Añadimos funciones para obtener el ícono asociado a una extensión ---
+# --- Función para obtener el ícono asociado a una extensión ---
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -63,9 +69,9 @@ function Debug-Print($message) {
     if ($global:DebugMode) { Write-Host "[DEBUG] $message" }
 }
 
-# ====================================
-# == Funciones de Dropbox (API) ==
-# ====================================
+# ========================================================
+# == Funciones de Dropbox (API y Descarga/Upload) ==
+# ========================================================
 
 function Get-AccessToken {
     # Reemplaza con tus credenciales
@@ -250,9 +256,9 @@ function Delete-DropboxItem($path) {
     }
 }
 
-# ========================================
-# == Funciones de Descarga (Sin Execute) ==
-# ========================================
+# -------------------------------
+# Funciones de Descarga (Sin Execute)
+# -------------------------------
 
 function Download-DropboxFileWithProgressNoExecute($FilePath, $LocalPath, $parentPanel) {
     $FileName = [System.IO.Path]::GetFileName($FilePath)
@@ -374,7 +380,7 @@ function Download-DropboxFolderNoExecute($FolderPath, $LocalParent, $parentPanel
     if (!(Test-Path $localFolderPath)) {
         New-Item -ItemType Directory -Path $localFolderPath | Out-Null
     }
-    # Usamos un scriptblock para recursión y obtener TODOS los archivos
+    # Recursión para obtener TODOS los archivos
     $allFiles = @()
     $GetAllFiles = {
         param($path)
@@ -437,20 +443,21 @@ function Download-DropboxFolderNoExecute($FolderPath, $LocalParent, $parentPanel
     return $resultPaths
 }
 
-# ============================================
-# == Interfaz Gráfica (Código Completo) ==
-# ============================================
+# ==========================================================
+# == INTERFAZ GRÁFICA (CÓDIGO COMPLETO UNIDO Y MODIFICADO) ==
+# ==========================================================
 
+# Crear formulario principal
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "UTP"
 $form.Size = New-Object System.Drawing.Size(900,600)
 $form.StartPosition = "CenterScreen"
 
-# Creamos el ImageList y agregamos el ícono para carpetas
+# Crear ImageList e íconos
 $imageList = New-Object System.Windows.Forms.ImageList
 $folderIcon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\Windows\explorer.exe").ToBitmap()
 $imageList.Images.Add("folder", $folderIcon)
-# Opcional: ícono por defecto para archivos si no se encuentra según extensión
+# Ícono por defecto para archivos
 if (-not $imageList.Images.ContainsKey("file")) {
     $defaultFileIcon = [System.Drawing.SystemIcons]::Information.ToBitmap()
     $imageList.Images.Add("file", $defaultFileIcon)
@@ -462,14 +469,16 @@ $fileListView.Location = New-Object System.Drawing.Point(10,10)
 $fileListView.Size = New-Object System.Drawing.Size(350,400)
 $fileListView.View = [System.Windows.Forms.View]::List
 $fileListView.SmallImageList = $imageList
+$fileListView.MultiSelect = $true    # Habilitar selección múltiple (Ctrl, Shift)
 $form.Controls.Add($fileListView)
 
-# ListBox (derecha) para los ítems seleccionados para descarga
+# ListBox (derecha) para ítems seleccionados para descarga
 $selectedFilesBox = New-Object System.Windows.Forms.ListBox
 $selectedFilesBox.Location = New-Object System.Drawing.Point(460,10)
 $selectedFilesBox.Size = New-Object System.Drawing.Size(350,400)
 $form.Controls.Add($selectedFilesBox)
 
+# Función para aplicar estilo a botones
 function Set-ButtonStyle($button) {
     $button.BackColor  = [System.Drawing.Color]::Red
     $button.ForeColor  = [System.Drawing.Color]::White
@@ -479,18 +488,18 @@ function Set-ButtonStyle($button) {
     $button.TextAlign  = [System.Drawing.ContentAlignment]::MiddleCenter
 }
 
-# Botón para pasar ítems de la izquierda a la derecha
+# Botón para pasar ítems de la izquierda a la derecha (a lista de descarga)
 $addButton = New-Object System.Windows.Forms.Button
 $addButton.Text = "→"
 $addButton.Size = New-Object System.Drawing.Size(30,30)
 $addButton.Location = New-Object System.Drawing.Point(420,150)
 Set-ButtonStyle $addButton
 $addButton.Add_Click({
-    if ($fileListView.SelectedItems.Count -gt 0) {
-        $selectedItem = $fileListView.SelectedItems[0].Text
-        if ($selectedItem -and $selectedItem -ne "..") {
-            $entry = $global:dropboxEntries[$selectedItem]
-            $filePath = if ($entry) { $entry.path_lower } else { "$global:currentPath/$selectedItem" -replace "//","/" }
+    foreach ($selectedItem in $fileListView.SelectedItems) {
+        $itemText = $selectedItem.Text
+        if ($itemText -and $itemText -ne "..") {
+            $entry = $global:dropboxEntries[$itemText]
+            $filePath = if ($entry) { $entry.path_lower } else { "$global:currentPath/$itemText" -replace "//","/" }
             if (-not $selectedFilesBox.Items.Contains($filePath)) {
                 $selectedFilesBox.Items.Add($filePath)
             }
@@ -654,7 +663,7 @@ $createFolderButton.Add_Click({
 })
 $form.Controls.Add($createFolderButton)
 
-# Botón "Descargar": primero descarga todos los ítems y luego los ejecuta en orden.
+# Botón "Descargar": descarga todos los ítems y luego los ejecuta en orden.
 $downloadButton = New-Object System.Windows.Forms.Button
 $downloadButton.Text = "Descargar"
 $downloadButton.Size = New-Object System.Drawing.Size(100,40)
@@ -690,7 +699,7 @@ $downloadButton.Add_Click({
 $form.Controls.Add($downloadButton)
 
 # Menú contextual para el ListView (Copiar, Cortar, Pegar, Eliminar)
-$global:clipboardItem = $null
+$global:clipboardItem = @()
 $global:clipboardOperation = $null
 $contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $menuCopy   = New-Object System.Windows.Forms.ToolStripMenuItem("Copiar")
@@ -705,56 +714,57 @@ $fileListView.ContextMenuStrip = $contextMenu
 
 $menuCopy.Add_Click({
     if ($fileListView.SelectedItems.Count -gt 0) {
-        $selectedItem = $fileListView.SelectedItems[0].Text
-        if ($selectedItem -and $selectedItem -ne "..") {
-            $entry = $global:dropboxEntries[$selectedItem]
-            $global:clipboardItem = if ($entry) { $entry.path_lower } else { "$global:currentPath/$selectedItem" -replace "//","/" }
-            $global:clipboardOperation = "copy"
+        $global:clipboardItem = @()
+        foreach ($item in $fileListView.SelectedItems) {
+            if ($item.Text -and $item.Text -ne "..") {
+                $entry = $global:dropboxEntries[$item.Text]
+                $global:clipboardItem += if ($entry) { $entry.path_lower } else { "$global:currentPath/$($item.Text)" -replace "//","/" }
+            }
         }
+        $global:clipboardOperation = "copy"
     }
 })
 $menuCut.Add_Click({
     if ($fileListView.SelectedItems.Count -gt 0) {
-        $selectedItem = $fileListView.SelectedItems[0].Text
-        if ($selectedItem -and $selectedItem -ne "..") {
-            $entry = $global:dropboxEntries[$selectedItem]
-            $global:clipboardItem = if ($entry) { $entry.path_lower } else { "$global:currentPath/$selectedItem" -replace "//","/" }
-            $global:clipboardOperation = "cut"
+        $global:clipboardItem = @()
+        foreach ($item in $fileListView.SelectedItems) {
+            if ($item.Text -and $item.Text -ne "..") {
+                $entry = $global:dropboxEntries[$item.Text]
+                $global:clipboardItem += if ($entry) { $entry.path_lower } else { "$global:currentPath/$($item.Text)" -replace "//","/" }
+            }
         }
+        $global:clipboardOperation = "cut"
     }
 })
 $menuPaste.Add_Click({
-    if ($global:clipboardItem) {
-        $destFile = [System.IO.Path]::GetFileName($global:clipboardItem)
-        $destination = if ([string]::IsNullOrEmpty($global:currentPath) -or $global:currentPath -eq "/") {
-            "/$destFile"
-        } else {
-            "$global:currentPath/$destFile"
+    if ($global:clipboardItem -and $global:clipboardItem.Count -gt 0) {
+        foreach ($item in $global:clipboardItem) {
+            $destFile = [System.IO.Path]::GetFileName($item)
+            $destination = if ([string]::IsNullOrEmpty($global:currentPath) -or $global:currentPath -eq "/") {
+                "/$destFile"
+            } else {
+                "$global:currentPath/$destFile"
+            }
+            if ($global:clipboardOperation -eq "copy") {
+                Copy-DropboxItem $item $destination | Out-Null
+            } elseif ($global:clipboardOperation -eq "cut") {
+                Move-DropboxItem $item $destination | Out-Null
+            }
         }
-        $result = $false
-        if ($global:clipboardOperation -eq "copy") {
-            $result = Copy-DropboxItem $global:clipboardItem $destination
-        } elseif ($global:clipboardOperation -eq "cut") {
-            $result = Move-DropboxItem $global:clipboardItem $destination
-        }
-        if ($result) {
-            Update-FileList
-            $global:clipboardItem = $null
-            $global:clipboardOperation = $null
-        }
+        Update-FileList
+        $global:clipboardItem = @()
+        $global:clipboardOperation = $null
     }
 })
 $menuDelete.Add_Click({
-    if ($fileListView.SelectedItems.Count -gt 0) {
-        $selectedItem = $fileListView.SelectedItems[0].Text
-        if ($selectedItem -and $selectedItem -ne "..") {
-            $entry = $global:dropboxEntries[$selectedItem]
-            $pathToDelete = if ($entry) { $entry.path_lower } else { "$global:currentPath/$selectedItem" -replace "//","/" }
-            if (Delete-DropboxItem $pathToDelete) {
-                Update-FileList
-            }
+    foreach ($item in $fileListView.SelectedItems) {
+        if ($item.Text -and $item.Text -ne "..") {
+            $entry = $global:dropboxEntries[$item.Text]
+            $pathToDelete = if ($entry) { $entry.path_lower } else { "$global:currentPath/$($item.Text)" -replace "//","/" }
+            Delete-DropboxItem $pathToDelete | Out-Null
         }
     }
+    Update-FileList
 })
 
 $global:currentPath = ""
@@ -768,7 +778,7 @@ function Update-FileList {
         $fileListView.Items.Add($upItem)
     }
     # Se obtiene y ordena la lista de archivos y carpetas:
-    # Primero se colocan las carpetas (valor 0) y luego los archivos (valor 1), ambos ordenados alfabéticamente.
+    # Primero las carpetas (valor 0) y luego los archivos (valor 1), ordenados alfabéticamente.
     $entries = Get-DropboxFiles -Path $global:currentPath | Sort-Object -Property { if($_.PSObject.Properties[".tag"].Value -eq "folder") { 0 } else { 1 } }, name
     if ($entries) {
         $global:dropboxEntries = @{}
@@ -783,7 +793,7 @@ function Update-FileList {
                     if ([string]::IsNullOrEmpty($ext)) { $ext = "file" }
                     if (-not $imageList.Images.ContainsKey($ext)) {
                         try {
-                            # Se utiliza un nombre ficticio para extraer el ícono asociado a la extensión
+                            # Se usa un nombre ficticio para extraer el ícono asociado a la extensión
                             $dummyFile = "dummy" + $ext
                             $iconBmp = Get-FileIcon -filePath $dummyFile
                             $imageList.Images.Add($ext, $iconBmp)
@@ -837,3 +847,8 @@ if ($global:accessToken) {
 } else {
     Write-Host "No se pudo obtener el token. Verifica tus credenciales."
 }
+
+# ===============================================================
+# ======================= FIN DEL CÓDIGO ========================
+# ===============================================================
+
