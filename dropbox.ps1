@@ -1,5 +1,5 @@
 # ===============================================================
-# ====================== INICIO DEL CÓDIGO ======================
+# ====================== INICIO DEL CÓDIGO E.C.N=================
 # ===============================================================
 
 # Cargar ensamblados necesarios
@@ -558,7 +558,7 @@ $moveDownButton.Add_Click({
 })
 $null = $form.Controls.Add($moveDownButton)
 
-# Panel para mostrar el progreso de descarga
+# Panel para mostrar el progreso de descarga (y ahora también el de subida)
 $downloadStatusPanel = New-Object System.Windows.Forms.FlowLayoutPanel
 $downloadStatusPanel.Location = New-Object System.Drawing.Point(10,500)
 $downloadStatusPanel.Size = New-Object System.Drawing.Size(870,60)
@@ -622,15 +622,55 @@ $uploadButton.Add_Click({
             $fileDialog.Multiselect = $true
             if ($fileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
                 foreach ($file in $fileDialog.FileNames) {
-                    Upload-DropboxFile $file $global:currentPath | Out-Null
+                    # Crear panel de estado para la subida del archivo
+                    $panel = New-Object System.Windows.Forms.Panel
+                    $panel.Size = New-Object System.Drawing.Size(([int]$global:downloadStatusPanel.Width - 25), 40)
+                    $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+                    $fileNameLabel = New-Object System.Windows.Forms.Label
+                    $fileNameLabel.Text = [System.IO.Path]::GetFileName($file)
+                    $fileNameLabel.Size = New-Object System.Drawing.Size(200,20)
+                    $fileNameLabel.Location = New-Object System.Drawing.Point(5,5)
+                    $panel.Controls.Add($fileNameLabel) | Out-Null
+                    $statusLabel = New-Object System.Windows.Forms.Label
+                    $statusLabel.Text = "Subiendo..."
+                    $statusLabel.Size = New-Object System.Drawing.Size(150,20)
+                    $statusLabel.Location = New-Object System.Drawing.Point(210,5)
+                    $panel.Controls.Add($statusLabel) | Out-Null
+                    $global:downloadStatusPanel.Controls.Add($panel) | Out-Null
+                    $global:downloadStatusPanel.ScrollControlIntoView($panel)
+                    
+                    $result = Upload-DropboxFile $file $global:currentPath
+                    if ($result) {
+                        $statusLabel.Text = "archivo subido"
+                    } else {
+                        $statusLabel.Text = "Error al subir"
+                    }
                 }
                 Update-FileList
             }
         } elseif ($option -eq "folder") {
             $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
             if ($folderDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                # Crear panel de estado para la subida de la carpeta
+                $panel = New-Object System.Windows.Forms.Panel
+                $panel.Size = New-Object System.Drawing.Size(([int]$global:downloadStatusPanel.Width - 25), 40)
+                $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+                $folderNameLabel = New-Object System.Windows.Forms.Label
+                $folderNameLabel.Text = [System.IO.Path]::GetFileName($folderDialog.SelectedPath)
+                $folderNameLabel.Size = New-Object System.Drawing.Size(200,20)
+                $folderNameLabel.Location = New-Object System.Drawing.Point(5,5)
+                $panel.Controls.Add($folderNameLabel) | Out-Null
+                $statusLabel = New-Object System.Windows.Forms.Label
+                $statusLabel.Text = "Subiendo carpeta..."
+                $statusLabel.Size = New-Object System.Drawing.Size(150,20)
+                $statusLabel.Location = New-Object System.Drawing.Point(210,5)
+                $panel.Controls.Add($statusLabel) | Out-Null
+                $global:downloadStatusPanel.Controls.Add($panel) | Out-Null
+                $global:downloadStatusPanel.ScrollControlIntoView($panel)
+                
                 Upload-DropboxFolder $folderDialog.SelectedPath $global:currentPath
                 Update-FileList
+                $statusLabel.Text = "carpeta subida"
             }
         }
     }
@@ -858,3 +898,4 @@ if ($global:accessToken) {
 # ===============================================================
 # ======================= FIN DEL CÓDIGO ========================
 # ===============================================================
+# ==========================E.C.N================================
