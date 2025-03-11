@@ -1,6 +1,5 @@
 # ===============================================================
 # ====================== INICIO DEL CÓDIGO ======================
-# ====================== DISEÑADO POR E.C. ======================
 # ===============================================================
 
 # Cargar ensamblados necesarios
@@ -274,12 +273,12 @@ function Download-DropboxFileWithProgressNoExecute($FilePath, $LocalPath, $paren
     $fileNameLabel.Text = $FileName
     $fileNameLabel.Size = New-Object System.Drawing.Size(200,20)
     $fileNameLabel.Location = New-Object System.Drawing.Point(5,5)
-    $panel.Controls.Add($fileNameLabel)
+    $panel.Controls.Add($fileNameLabel) | Out-Null
     $progressBar = New-Object System.Windows.Forms.ProgressBar
     $progressBar.Location = New-Object System.Drawing.Point(210,5)
     $progressBar.Size = New-Object System.Drawing.Size(250,20)
     $progressBar.Style = 'Continuous'
-    $panel.Controls.Add($progressBar)
+    $panel.Controls.Add($progressBar) | Out-Null
     $panel.Refresh()
     $null = $progressBar.Handle
     [ThemeHelper]::SetWindowTheme($progressBar.Handle, "", "")
@@ -288,8 +287,8 @@ function Download-DropboxFileWithProgressNoExecute($FilePath, $LocalPath, $paren
     $statusLabel.Text = ""
     $statusLabel.Size = New-Object System.Drawing.Size(150,20)
     $statusLabel.Location = New-Object System.Drawing.Point(470,5)
-    $panel.Controls.Add($statusLabel)
-    $parentPanel.Controls.Add($panel)
+    $panel.Controls.Add($statusLabel) | Out-Null
+    $parentPanel.Controls.Add($panel) | Out-Null
     $parentPanel.ScrollControlIntoView($panel)
     $parentPanel.Refresh()
     $done = New-Object System.Threading.ManualResetEvent $false
@@ -312,7 +311,7 @@ function Download-DropboxFileWithProgressNoExecute($FilePath, $LocalPath, $paren
         } else {
             $statusLabel.Text = "Completado"
         }
-        $done.Set() | Out-Null
+        if ($null -ne $done) { $done.Set() | Out-Null }
     })
     try {
         $uri = [System.Uri] "https://content.dropboxapi.com/2/files/download"
@@ -320,7 +319,7 @@ function Download-DropboxFileWithProgressNoExecute($FilePath, $LocalPath, $paren
     } catch {
         $statusLabel.Text = "Error al iniciar descarga"
         Debug-Print "Error al iniciar descarga: $($_.Exception.Message)"
-        $done.Set() | Out-Null
+        if ($null -ne $done) { $done.Set() | Out-Null }
         return $null
     }
     while (-not $done.WaitOne(100)) {
@@ -349,7 +348,7 @@ function Download-DropboxFileSilent($FilePath, $LocalPath) {
             $errorOccurred = $true
             Debug-Print "Error/Cancel en descarga silent: $($args.Error)"
         }
-        $done.Set() | Out-Null
+        if ($null -ne $done) { $done.Set() | Out-Null }
     })
     try {
         $uri = [System.Uri] "https://content.dropboxapi.com/2/files/download"
@@ -367,6 +366,9 @@ function Download-DropboxFileSilent($FilePath, $LocalPath) {
     return $OutFilePath
 }
 
+# ======================
+# Función de Descarga de Carpeta (modificada para descarga recursiva)
+# ======================
 function Download-DropboxFolderNoExecute($FolderPath, $LocalParent, $parentPanel) {
     $resultPaths = @()
     $meta = Get-DropboxMetadata $FolderPath
@@ -380,25 +382,8 @@ function Download-DropboxFolderNoExecute($FolderPath, $LocalParent, $parentPanel
     if (!(Test-Path $localFolderPath)) {
         New-Item -ItemType Directory -Path $localFolderPath | Out-Null
     }
-    # Recursión para obtener TODOS los archivos
-    $allFiles = @()
-    $GetAllFiles = {
-        param($path)
-        $entries = Get-DropboxFiles -Path $path
-        foreach ($entry in $entries) {
-            if ($entry.PSObject.Properties[".tag"].Value -eq "folder") {
-                & $GetAllFiles $entry.path_lower
-            } else {
-                $allFiles += $entry.path_lower
-            }
-        }
-    }
-    & $GetAllFiles $FolderPath
-    $totalFiles = $allFiles.Count
-    if ($totalFiles -eq 0) {
-        Debug-Print "No hay archivos en la carpeta $FolderPath"
-        return $resultPaths
-    }
+    
+    # Panel de progreso para la carpeta (opcional)
     $panel = New-Object System.Windows.Forms.Panel
     $panel.Size = New-Object System.Drawing.Size(([int]$parentPanel.Width - 25), 40)
     $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
@@ -406,12 +391,12 @@ function Download-DropboxFolderNoExecute($FolderPath, $LocalParent, $parentPanel
     $folderLabel.Text = "Descargando carpeta: $folderName"
     $folderLabel.Size = New-Object System.Drawing.Size(200,20)
     $folderLabel.Location = New-Object System.Drawing.Point(5,5)
-    $panel.Controls.Add($folderLabel)
+    $panel.Controls.Add($folderLabel) | Out-Null
     $folderProgressBar = New-Object System.Windows.Forms.ProgressBar
     $folderProgressBar.Location = New-Object System.Drawing.Point(210,5)
     $folderProgressBar.Size = New-Object System.Drawing.Size(250,20)
     $folderProgressBar.Style = 'Continuous'
-    $panel.Controls.Add($folderProgressBar)
+    $panel.Controls.Add($folderProgressBar) | Out-Null
     $panel.Refresh()
     $null = $folderProgressBar.Handle
     [ThemeHelper]::SetWindowTheme($folderProgressBar.Handle, "", "")
@@ -420,25 +405,47 @@ function Download-DropboxFolderNoExecute($FolderPath, $LocalParent, $parentPanel
     $folderStatusLabel.Text = "0%"
     $folderStatusLabel.Size = New-Object System.Drawing.Size(150,20)
     $folderStatusLabel.Location = New-Object System.Drawing.Point(470,5)
-    $panel.Controls.Add($folderStatusLabel)
-    $parentPanel.Controls.Add($panel)
+    $panel.Controls.Add($folderStatusLabel) | Out-Null
+    $parentPanel.Controls.Add($panel) | Out-Null
     $parentPanel.ScrollControlIntoView($panel)
     $parentPanel.Refresh()
+
     $filesDownloaded = 0
-    foreach ($file in $allFiles) {
-        $localPath = Download-DropboxFileSilent $file $localFolderPath
-        if ($localPath) {
-            $filesDownloaded++
-            $resultPaths += $localPath
+
+    function DownloadFilesRecursively {
+        param(
+            [string]$currentDropboxPath,
+            [string]$currentLocalPath
+        )
+        $entries = Get-DropboxFiles -Path $currentDropboxPath
+        $totalEntries = $entries.Count
+        foreach ($entry in $entries) {
+            if ($entry.PSObject.Properties[".tag"].Value -eq "folder") {
+                # Crear subcarpeta local y llamar recursivamente
+                $subLocalFolder = Join-Path $currentLocalPath $entry.name
+                if (!(Test-Path $subLocalFolder)) {
+                    New-Item -ItemType Directory -Path $subLocalFolder | Out-Null
+                }
+                DownloadFilesRecursively -currentDropboxPath $entry.path_lower -currentLocalPath $subLocalFolder
+            } else {
+                $localPath = Download-DropboxFileSilent $entry.path_lower $currentLocalPath
+                if ($localPath) {
+                    $resultPaths += $localPath
+                    $filesDownloaded++
+                    # Actualizar progreso para esta carpeta
+                    $percentage = [math]::Round(($filesDownloaded / $totalEntries * 100))
+                    $folderProgressBar.Value = $percentage
+                    $folderStatusLabel.Text  = "$percentage%"
+                }
+            }
         }
-        $percentage = [math]::Round(($filesDownloaded / $totalFiles * 100))
-        $folderProgressBar.Value = $percentage
-        $folderStatusLabel.Text  = "$percentage%"
     }
-    if ($filesDownloaded -eq $totalFiles) {
+
+    DownloadFilesRecursively -currentDropboxPath $FolderPath -currentLocalPath $localFolderPath
+    if ($filesDownloaded -gt 0) {
         $folderStatusLabel.Text += " / Completado"
     } else {
-        $folderStatusLabel.Text += " / Error en algunos archivos"
+        $folderStatusLabel.Text += " / Sin archivos"
     }
     return $resultPaths
 }
@@ -470,13 +477,13 @@ $fileListView.Size = New-Object System.Drawing.Size(350,400)
 $fileListView.View = [System.Windows.Forms.View]::List
 $fileListView.SmallImageList = $imageList
 $fileListView.MultiSelect = $true    # Habilitar selección múltiple (Ctrl, Shift)
-$form.Controls.Add($fileListView)
+$null = $form.Controls.Add($fileListView)
 
 # ListBox (derecha) para ítems seleccionados para descarga
 $selectedFilesBox = New-Object System.Windows.Forms.ListBox
 $selectedFilesBox.Location = New-Object System.Drawing.Point(460,10)
 $selectedFilesBox.Size = New-Object System.Drawing.Size(350,400)
-$form.Controls.Add($selectedFilesBox)
+$null = $form.Controls.Add($selectedFilesBox)
 
 # Función para aplicar estilo a botones
 function Set-ButtonStyle($button) {
@@ -501,12 +508,12 @@ $addButton.Add_Click({
             $entry = $global:dropboxEntries[$itemText]
             $filePath = if ($entry) { $entry.path_lower } else { "$global:currentPath/$itemText" -replace "//","/" }
             if (-not $selectedFilesBox.Items.Contains($filePath)) {
-                $selectedFilesBox.Items.Add($filePath)
+                $selectedFilesBox.Items.Add($filePath) | Out-Null
             }
         }
     }
 })
-$form.Controls.Add($addButton)
+$null = $form.Controls.Add($addButton)
 
 $removeButton = New-Object System.Windows.Forms.Button
 $removeButton.Text = "←"
@@ -514,9 +521,9 @@ $removeButton.Size = New-Object System.Drawing.Size(30,30)
 $removeButton.Location = New-Object System.Drawing.Point(420,190)
 Set-ButtonStyle $removeButton
 $removeButton.Add_Click({
-    $selectedFilesBox.Items.Remove($selectedFilesBox.SelectedItem)
+    $selectedFilesBox.Items.Remove($selectedFilesBox.SelectedItem) | Out-Null
 })
-$form.Controls.Add($removeButton)
+$null = $form.Controls.Add($removeButton)
 
 # Botones para reordenar la lista de archivos seleccionados (flecha arriba y flecha abajo)
 $moveUpButton = New-Object System.Windows.Forms.Button
@@ -529,11 +536,11 @@ $moveUpButton.Add_Click({
     if ($index -gt 0) {
         $item = $selectedFilesBox.Items[$index]
         $selectedFilesBox.Items.RemoveAt($index)
-        $selectedFilesBox.Items.Insert($index - 1, $item)
+        $selectedFilesBox.Items.Insert($index - 1, $item) | Out-Null
         $selectedFilesBox.SelectedIndex = $index - 1
     }
 })
-$form.Controls.Add($moveUpButton)
+$null = $form.Controls.Add($moveUpButton)
 
 $moveDownButton = New-Object System.Windows.Forms.Button
 $moveDownButton.Text = "↓"
@@ -545,18 +552,18 @@ $moveDownButton.Add_Click({
     if ($index -lt ($selectedFilesBox.Items.Count - 1) -and $index -ge 0) {
         $item = $selectedFilesBox.Items[$index]
         $selectedFilesBox.Items.RemoveAt($index)
-        $selectedFilesBox.Items.Insert($index + 1, $item)
+        $selectedFilesBox.Items.Insert($index + 1, $item) | Out-Null
         $selectedFilesBox.SelectedIndex = $index + 1
     }
 })
-$form.Controls.Add($moveDownButton)
+$null = $form.Controls.Add($moveDownButton)
 
 # Panel para mostrar el progreso de descarga
 $downloadStatusPanel = New-Object System.Windows.Forms.FlowLayoutPanel
 $downloadStatusPanel.Location = New-Object System.Drawing.Point(10,500)
 $downloadStatusPanel.Size = New-Object System.Drawing.Size(870,60)
 $downloadStatusPanel.AutoScroll = $true
-$form.Controls.Add($downloadStatusPanel)
+$null = $form.Controls.Add($downloadStatusPanel)
 $global:downloadStatusPanel = $downloadStatusPanel
 
 # Botón "Subir"
@@ -577,7 +584,7 @@ $uploadButton.Add_Click({
     $lbl.Text = "¿Qué desea subir?"
     $lbl.AutoSize = $true
     $lbl.Location = New-Object System.Drawing.Point(10,10)
-    $uploadForm.Controls.Add($lbl)
+    $uploadForm.Controls.Add($lbl) | Out-Null
     $btnArchivo = New-Object System.Windows.Forms.Button
     $btnArchivo.Text = "Archivo"
     $btnArchivo.Size = New-Object System.Drawing.Size(70,30)
@@ -587,7 +594,7 @@ $uploadButton.Add_Click({
         $uploadForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $uploadForm.Close()
     })
-    $uploadForm.Controls.Add($btnArchivo)
+    $uploadForm.Controls.Add($btnArchivo) | Out-Null
     $btnCarpeta = New-Object System.Windows.Forms.Button
     $btnCarpeta.Text = "Carpeta"
     $btnCarpeta.Size = New-Object System.Drawing.Size(70,30)
@@ -597,7 +604,7 @@ $uploadButton.Add_Click({
         $uploadForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $uploadForm.Close()
     })
-    $uploadForm.Controls.Add($btnCarpeta)
+    $uploadForm.Controls.Add($btnCarpeta) | Out-Null
     $btnCancelar = New-Object System.Windows.Forms.Button
     $btnCancelar.Text = "Cancelar"
     $btnCancelar.Size = New-Object System.Drawing.Size(70,30)
@@ -606,7 +613,7 @@ $uploadButton.Add_Click({
         $uploadForm.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
         $uploadForm.Close()
     })
-    $uploadForm.Controls.Add($btnCancelar)
+    $uploadForm.Controls.Add($btnCancelar) | Out-Null
     $dialogResult = $uploadForm.ShowDialog($form)
     if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) {
         $option = $uploadForm.Tag
@@ -628,7 +635,7 @@ $uploadButton.Add_Click({
         }
     }
 })
-$form.Controls.Add($uploadButton)
+$null = $form.Controls.Add($uploadButton)
 
 # Botón "Crear carpeta"
 $createFolderButton = New-Object System.Windows.Forms.Button
@@ -661,7 +668,7 @@ $createFolderButton.Add_Click({
         }
     }
 })
-$form.Controls.Add($createFolderButton)
+$null = $form.Controls.Add($createFolderButton)
 
 # Botón "Descargar": descarga todos los ítems y luego los ejecuta en orden.
 $downloadButton = New-Object System.Windows.Forms.Button
@@ -696,7 +703,7 @@ $downloadButton.Add_Click({
         }
     }
 })
-$form.Controls.Add($downloadButton)
+$null = $form.Controls.Add($downloadButton)
 
 # Menú contextual para el ListView (Copiar, Cortar, Pegar, Eliminar)
 $global:clipboardItem = @()
@@ -706,10 +713,10 @@ $menuCopy   = New-Object System.Windows.Forms.ToolStripMenuItem("Copiar")
 $menuCut    = New-Object System.Windows.Forms.ToolStripMenuItem("Cortar")
 $menuPaste  = New-Object System.Windows.Forms.ToolStripMenuItem("Pegar")
 $menuDelete = New-Object System.Windows.Forms.ToolStripMenuItem("Eliminar")
-$contextMenu.Items.Add($menuCopy)
-$contextMenu.Items.Add($menuCut)
-$contextMenu.Items.Add($menuPaste)
-$contextMenu.Items.Add($menuDelete)
+$contextMenu.Items.Add($menuCopy) | Out-Null
+$contextMenu.Items.Add($menuCut) | Out-Null
+$contextMenu.Items.Add($menuPaste) | Out-Null
+$contextMenu.Items.Add($menuDelete) | Out-Null
 $fileListView.ContextMenuStrip = $contextMenu
 
 $menuCopy.Add_Click({
@@ -775,7 +782,7 @@ function Update-FileList {
     if ($global:currentPath -ne "") {
         $upItem = New-Object System.Windows.Forms.ListViewItem("..")
         $upItem.ImageKey = "folder"
-        $fileListView.Items.Add($upItem)
+        $null = $fileListView.Items.Add($upItem)
     }
     # Se obtiene y ordena la lista de archivos y carpetas:
     # Primero las carpetas (valor 0) y luego los archivos (valor 1), ordenados alfabéticamente.
@@ -803,7 +810,7 @@ function Update-FileList {
                     }
                     $lvi.ImageKey = $ext
                 }
-                $fileListView.Items.Add($lvi)
+                $null = $fileListView.Items.Add($lvi)
                 $global:dropboxEntries[$entry.name] = $entry
             }
         }
@@ -843,7 +850,7 @@ $fileListView.Add_DoubleClick({
 $global:accessToken = Get-AccessToken
 if ($global:accessToken) {
     Update-FileList
-    $form.ShowDialog()
+    $form.ShowDialog() | Out-Null
 } else {
     Write-Host "No se pudo obtener el token. Verifica tus credenciales."
 }
@@ -851,4 +858,3 @@ if ($global:accessToken) {
 # ===============================================================
 # ======================= FIN DEL CÓDIGO ========================
 # ===============================================================
-
