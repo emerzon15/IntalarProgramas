@@ -62,6 +62,13 @@ function Get-FileIcon {
     return $bitmap
 }
 
+# --- Función para determinar si el usuario actual es administrador ---
+function Is-Admin {
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 # --- Depuración ---
 $global:DebugMode = $true
 function Debug-Print($message) {
@@ -275,8 +282,6 @@ function Download-DropboxFileWithProgressNoExecute($FilePath, $LocalPath, $paren
     # Label para el nombre del archivo
     $fileNameLabel = New-Object System.Windows.Forms.Label
     $fileNameLabel.Text = $FileName
-    
-    # Aseguramos que no salte de línea y muestre "..." si se pasa del ancho
     $fileNameLabel.AutoSize = $false
     $fileNameLabel.AutoEllipsis = $true
     $fileNameLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
@@ -409,7 +414,6 @@ function Download-DropboxFolderNoExecute($FolderPath, $LocalParent, $parentPanel
 
     $folderLabel = New-Object System.Windows.Forms.Label
     $folderLabel.Text = "Descargando carpeta: $folderName"
-    # Ajustes para que no corte texto
     $folderLabel.AutoSize = $false
     $folderLabel.AutoEllipsis = $true
     $folderLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
@@ -765,11 +769,24 @@ $downloadButton.Add_Click({
             if ($localPath) { $allDownloadedPaths += $localPath }
         }
     }
+    # Filtrar únicamente rutas existentes para evitar errores
+    $allDownloadedPaths = $allDownloadedPaths | Where-Object { Test-Path $_ }
+    
+    # Definir credenciales del usuario Administrador (se usarán solo si no somos admin)
+    $adminUser = ".\Administrador"
+    $adminPass = "UTPL4b$AQP265" | ConvertTo-SecureString -AsPlainText -Force
+    $adminCred = New-Object System.Management.Automation.PSCredential($adminUser, $adminPass)
+    
     foreach ($localFile in $allDownloadedPaths) {
         Debug-Print "Desbloqueando y ejecutando: $localFile"
         try {
             Unblock-File -Path $localFile
-            Start-Process -FilePath $localFile -WindowStyle Hidden
+            if (Is-Admin) {
+                Start-Process -FilePath $localFile -WindowStyle Hidden
+            }
+            else {
+                Start-Process -FilePath $localFile -WindowStyle Hidden -Credential $adminCred
+            }
         } catch {
             Debug-Print "No se pudo ejecutar $localFile $($_.Exception.Message)"
         }
