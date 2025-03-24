@@ -149,8 +149,22 @@ function Get-DropboxMetadata($Path) {
     }
 }
 
-function Upload-DropboxFile($LocalFilePath, $DropboxDestinationFolder) {
+# -------------------------------
+#   NUEVAS FUNCIONES CON PROGRESO DE SUBIDA
+# -------------------------------
+
+# Subida de un archivo con "falso" progreso: 0% → 100%
+function Upload-DropboxFileNoExecute($LocalFilePath, $DropboxDestinationFolder, $panel) {
     $FileName = [System.IO.Path]::GetFileName($LocalFilePath)
+
+    # Barra y label del panel (ya creados antes de llamar esta función)
+    $progressBar = $panel.Controls | Where-Object { $_ -is [System.Windows.Forms.ProgressBar] }
+    $statusLabel = $panel.Controls | Where-Object { $_ -is [System.Windows.Forms.Label] -and $_.Name -eq "StatusLabel" }
+
+    # Iniciamos en 0%
+    $progressBar.Value = 0
+    $statusLabel.Text  = "0%"
+
     if ([string]::IsNullOrEmpty($DropboxDestinationFolder) -or $DropboxDestinationFolder -eq "/") {
         $DropboxPath = "/$FileName"
     } else {
@@ -169,16 +183,62 @@ function Upload-DropboxFile($LocalFilePath, $DropboxDestinationFolder) {
         "Content-Type" = "application/octet-stream"
     }
     try {
+        # Subida sin progreso parcial real (bloque único)
         Invoke-RestMethod -Uri $Url -Method Post -Headers $Headers -InFile $LocalFilePath -ContentType "application/octet-stream" | Out-Null
+
+        # Si todo va bien, lo ponemos en 100% / Completado
+        $progressBar.Value = 100
+        $statusLabel.Text  = "100% / Completado"
         return $true
     } catch {
         Debug-Print "Error al subir archivo: $($_.Exception.Message)"
+        $statusLabel.Text = "Error al subir"
         return $false
     }
 }
 
-function Upload-DropboxFolder($LocalFolderPath, $DropboxDestinationFolder) {
+# Subida recursiva de carpeta con "falso" progreso (por archivo)
+function Upload-DropboxFolderNoExecute($LocalFolderPath, $DropboxDestinationFolder, $parentPanel) {
+    $resultPaths = @()
     $FolderName = [System.IO.Path]::GetFileName($LocalFolderPath)
+    if (-not $FolderName) { $FolderName = "FolderLocal" }
+
+    # Creamos un panel con barra de progreso para la carpeta
+    $panel = New-Object System.Windows.Forms.Panel
+    $panel.Size = New-Object System.Drawing.Size(([int]$parentPanel.Width - 25), 40)
+    $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+
+    $folderLabel = New-Object System.Windows.Forms.Label
+    $folderLabel.Text = "Subiendo carpeta: $FolderName"
+    $folderLabel.AutoSize = $false
+    $folderLabel.AutoEllipsis = $true
+    $folderLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $folderLabel.Size = New-Object System.Drawing.Size(400,20)
+    $folderLabel.Location = New-Object System.Drawing.Point(5,5)
+    $panel.Controls.Add($folderLabel) | Out-Null
+
+    $folderProgressBar = New-Object System.Windows.Forms.ProgressBar
+    $folderProgressBar.Location = New-Object System.Drawing.Point(410,5)
+    $folderProgressBar.Size = New-Object System.Drawing.Size(250,20)
+    $folderProgressBar.Style = 'Continuous'
+    $panel.Controls.Add($folderProgressBar) | Out-Null
+    $panel.Refresh()
+    $null = $folderProgressBar.Handle
+    [ThemeHelper]::SetWindowTheme($folderProgressBar.Handle, "", "")
+    [Win32]::SendMessage($folderProgressBar.Handle, $PBM_SETBARCOLOR, [IntPtr]::Zero, [System.Drawing.Color]::Red.ToArgb())
+
+    $folderStatusLabel = New-Object System.Windows.Forms.Label
+    $folderStatusLabel.Name = "StatusLabel"  # para identificarla
+    $folderStatusLabel.Text = "0%"
+    $folderStatusLabel.Size = New-Object System.Drawing.Size(120,20)
+    $folderStatusLabel.Location = New-Object System.Drawing.Point(665,5)
+    $panel.Controls.Add($folderStatusLabel) | Out-Null
+
+    $parentPanel.Controls.Add($panel) | Out-Null
+    $parentPanel.ScrollControlIntoView($panel)
+    $parentPanel.Refresh()
+
+    # Primero creamos la carpeta en Dropbox
     if ([string]::IsNullOrEmpty($DropboxDestinationFolder) -or $DropboxDestinationFolder -eq "/") {
         $DropboxFolderPath = "/$FolderName"
     } else {
@@ -198,12 +258,55 @@ function Upload-DropboxFolder($LocalFolderPath, $DropboxDestinationFolder) {
     } catch {
         Debug-Print "Error al crear carpeta: $($_.Exception.Message)"
     }
-    Get-ChildItem -Path $LocalFolderPath -File | ForEach-Object {
-        Upload-DropboxFile $_.FullName $DropboxFolderPath | Out-Null
+
+    # Recorrer todos los archivos y subcarpetas
+    $allFiles = Get-ChildItem -Path $LocalFolderPath -Recurse -File
+    $totalFiles = $allFiles.Count
+    $filesUploaded = 0
+
+    foreach ($file in $allFiles) {
+        # Calcular ruta de Dropbox para cada subarchivo
+        $relativePath = $file.FullName.Substring($LocalFolderPath.Length).TrimStart("\")
+        $destinationPath = Join-Path $DropboxFolderPath $relativePath
+
+        # Crear un panel de "archivo" para cada uno, o podemos subirlos "silenciosamente".
+        # Aquí haremos "silencioso" para no crear decenas de paneles:
+        # Si quieres un panel por cada archivo, puedes hacerlo igual que en Upload-DropboxFileNoExecute.
+        # Por simplicidad, subimos en bloque y solo actualizamos la barra "carpeta".
+        try {
+            $UrlFile = "https://content.dropboxapi.com/2/files/upload"
+            $HeadersFile = @{
+                "Authorization" = "Bearer $global:accessToken"
+                "Dropbox-API-Arg" = (ConvertTo-Json -Compress @{
+                    path = $destinationPath
+                    mode = "add"
+                    autorename = $true
+                    mute = $false
+                    strict_conflict = $false
+                })
+                "Content-Type" = "application/octet-stream"
+            }
+            Invoke-RestMethod -Uri $UrlFile -Method Post -Headers $HeadersFile -InFile $file.FullName -ContentType "application/octet-stream" | Out-Null
+            $filesUploaded++
+
+            # Actualizamos la barra para la carpeta
+            $percentage = [math]::Round(($filesUploaded / $totalFiles * 100))
+            $folderProgressBar.Value = $percentage
+            $folderStatusLabel.Text  = "$percentage%"
+
+        } catch {
+            Debug-Print "Error al subir archivo: $($_.Exception.Message)"
+        }
     }
-    Get-ChildItem -Path $LocalFolderPath -Directory | ForEach-Object {
-        Upload-DropboxFolder $_.FullName $DropboxFolderPath
+
+    if ($filesUploaded -gt 0) {
+        $folderProgressBar.Value = 100
+        $folderStatusLabel.Text = "100% / Completado"
+    } else {
+        $folderStatusLabel.Text += " / Sin archivos"
     }
+
+    return $resultPaths
 }
 
 function Copy-DropboxItem($fromPath, $toPath) {
@@ -302,7 +405,7 @@ function Download-DropboxFileWithProgressNoExecute($FilePath, $LocalPath, $paren
 
     # Label de estado (porcentaje, completado, etc.)
     $statusLabel = New-Object System.Windows.Forms.Label
-    $statusLabel.Text = ""
+    $statusLabel.Text = "0%"
     $statusLabel.Size = New-Object System.Drawing.Size(100,20)
     $statusLabel.Location = New-Object System.Drawing.Point(665,5)
     $panel.Controls.Add($statusLabel) | Out-Null
@@ -322,6 +425,7 @@ function Download-DropboxFileWithProgressNoExecute($FilePath, $LocalPath, $paren
         $progressBar.Value = $args.ProgressPercentage
         $statusLabel.Text  = "$($args.ProgressPercentage)%"
     })
+
     $webClient.add_DownloadFileCompleted({
         param($sender, $args)
         if ($args.Error) {
@@ -330,7 +434,8 @@ function Download-DropboxFileWithProgressNoExecute($FilePath, $LocalPath, $paren
         } elseif ($args.Cancelled) {
             $statusLabel.Text = "Descarga cancelada"
         } else {
-            $statusLabel.Text = "Completado"
+            $progressBar.Value = 100
+            $statusLabel.Text = "100% / Completado"
         }
         if ($null -ne $done) { $done.Set() | Out-Null }
     })
@@ -474,7 +579,8 @@ function Download-DropboxFolderNoExecute($FolderPath, $LocalParent, $parentPanel
 
     DownloadFilesRecursively -currentDropboxPath $FolderPath -currentLocalPath $localFolderPath
     if ($filesDownloaded -gt 0) {
-        $folderStatusLabel.Text += " / Completado"
+        $folderProgressBar.Value = 100
+        $folderStatusLabel.Text = "100% / Completado"
     } else {
         $folderStatusLabel.Text += " / Sin archivos"
     }
@@ -589,7 +695,7 @@ $moveDownButton.Add_Click({
 })
 $null = $form.Controls.Add($moveDownButton)
 
-# Panel para mostrar el progreso de descarga (y ahora también el de subida)
+# Panel para mostrar el progreso de descarga y subida
 $downloadStatusPanel = New-Object System.Windows.Forms.FlowLayoutPanel
 $downloadStatusPanel.Location = New-Object System.Drawing.Point(10,500)
 $downloadStatusPanel.Size = New-Object System.Drawing.Size(870,60)
@@ -611,11 +717,13 @@ $uploadButton.Add_Click({
     $uploadForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $uploadForm.MaximizeBox = $false
     $uploadForm.MinimizeBox = $false
+
     $lbl = New-Object System.Windows.Forms.Label
     $lbl.Text = "¿Qué desea subir?"
     $lbl.AutoSize = $true
     $lbl.Location = New-Object System.Drawing.Point(10,10)
     $uploadForm.Controls.Add($lbl) | Out-Null
+
     $btnArchivo = New-Object System.Windows.Forms.Button
     $btnArchivo.Text = "Archivo"
     $btnArchivo.Size = New-Object System.Drawing.Size(70,30)
@@ -626,6 +734,7 @@ $uploadButton.Add_Click({
         $uploadForm.Close()
     })
     $uploadForm.Controls.Add($btnArchivo) | Out-Null
+
     $btnCarpeta = New-Object System.Windows.Forms.Button
     $btnCarpeta.Text = "Carpeta"
     $btnCarpeta.Size = New-Object System.Drawing.Size(70,30)
@@ -636,6 +745,7 @@ $uploadButton.Add_Click({
         $uploadForm.Close()
     })
     $uploadForm.Controls.Add($btnCarpeta) | Out-Null
+
     $btnCancelar = New-Object System.Windows.Forms.Button
     $btnCancelar.Text = "Cancelar"
     $btnCancelar.Size = New-Object System.Drawing.Size(70,30)
@@ -645,6 +755,7 @@ $uploadButton.Add_Click({
         $uploadForm.Close()
     })
     $uploadForm.Controls.Add($btnCancelar) | Out-Null
+
     $dialogResult = $uploadForm.ShowDialog($form)
     if ($dialogResult -eq [System.Windows.Forms.DialogResult]::OK) {
         $option = $uploadForm.Tag
@@ -657,6 +768,7 @@ $uploadButton.Add_Click({
                     $panel = New-Object System.Windows.Forms.Panel
                     $panel.Size = New-Object System.Drawing.Size(([int]$global:downloadStatusPanel.Width - 25), 40)
                     $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+
                     $fileNameLabel = New-Object System.Windows.Forms.Label
                     $fileNameLabel.Text = [System.IO.Path]::GetFileName($file)
                     $fileNameLabel.AutoSize = $false
@@ -665,19 +777,31 @@ $uploadButton.Add_Click({
                     $fileNameLabel.Size = New-Object System.Drawing.Size(200,20)
                     $fileNameLabel.Location = New-Object System.Drawing.Point(5,5)
                     $panel.Controls.Add($fileNameLabel) | Out-Null
+
+                    $progressBar = New-Object System.Windows.Forms.ProgressBar
+                    $progressBar.Location = New-Object System.Drawing.Point(210,5)
+                    $progressBar.Size = New-Object System.Drawing.Size(250,20)
+                    $progressBar.Style = 'Continuous'
+                    $panel.Controls.Add($progressBar) | Out-Null
+                    $panel.Refresh()
+                    $null = $progressBar.Handle
+                    [ThemeHelper]::SetWindowTheme($progressBar.Handle, "", "")
+                    [Win32]::SendMessage($progressBar.Handle, $PBM_SETBARCOLOR, [IntPtr]::Zero, [System.Drawing.Color]::Red.ToArgb())
+
                     $statusLabel = New-Object System.Windows.Forms.Label
+                    $statusLabel.Name = "StatusLabel"
                     $statusLabel.Text = "Subiendo..."
                     $statusLabel.Size = New-Object System.Drawing.Size(150,20)
-                    $statusLabel.Location = New-Object System.Drawing.Point(210,5)
+                    $statusLabel.Location = New-Object System.Drawing.Point(465,5)
                     $panel.Controls.Add($statusLabel) | Out-Null
+
                     $global:downloadStatusPanel.Controls.Add($panel) | Out-Null
                     $global:downloadStatusPanel.ScrollControlIntoView($panel)
                     
-                    $result = Upload-DropboxFile $file $global:currentPath
-                    if ($result) {
-                        $statusLabel.Text = "archivo subido"
-                    } else {
-                        $statusLabel.Text = "Error al subir"
+                    # Usamos la nueva función con progreso "falso"
+                    $result = Upload-DropboxFileNoExecute $file $global:currentPath $panel
+                    if (-not $result) {
+                        # Si falla, el label ya dirá "Error al subir"
                     }
                 }
                 Update-FileList
@@ -685,29 +809,9 @@ $uploadButton.Add_Click({
         } elseif ($option -eq "folder") {
             $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
             if ($folderDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                # Crear panel de estado para la subida de la carpeta
-                $panel = New-Object System.Windows.Forms.Panel
-                $panel.Size = New-Object System.Drawing.Size(([int]$global:downloadStatusPanel.Width - 25), 40)
-                $panel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-                $folderNameLabel = New-Object System.Windows.Forms.Label
-                $folderNameLabel.Text = [System.IO.Path]::GetFileName($folderDialog.SelectedPath)
-                $folderNameLabel.AutoSize = $false
-                $folderNameLabel.AutoEllipsis = $true
-                $folderNameLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
-                $folderNameLabel.Size = New-Object System.Drawing.Size(200,20)
-                $folderNameLabel.Location = New-Object System.Drawing.Point(5,5)
-                $panel.Controls.Add($folderNameLabel) | Out-Null
-                $statusLabel = New-Object System.Windows.Forms.Label
-                $statusLabel.Text = "Subiendo carpeta..."
-                $statusLabel.Size = New-Object System.Drawing.Size(150,20)
-                $statusLabel.Location = New-Object System.Drawing.Point(210,5)
-                $panel.Controls.Add($statusLabel) | Out-Null
-                $global:downloadStatusPanel.Controls.Add($panel) | Out-Null
-                $global:downloadStatusPanel.ScrollControlIntoView($panel)
-                
-                Upload-DropboxFolder $folderDialog.SelectedPath $global:currentPath
+                # Subir carpeta con progreso
+                Upload-DropboxFolderNoExecute $folderDialog.SelectedPath $global:currentPath $global:downloadStatusPanel
                 Update-FileList
-                $statusLabel.Text = "carpeta subida"
             }
         }
     }
@@ -754,7 +858,7 @@ $downloadButton.Size = New-Object System.Drawing.Size(100,40)
 $downloadButton.Location = New-Object System.Drawing.Point(230,420)
 Set-ButtonStyle $downloadButton
 $downloadButton.Add_Click({
-    # Se fija la carpeta de Descargas por defecto
+    # Se fija la carpeta de Descargas por defecto en el usuario actual
     $chosenPath = Join-Path -Path $env:USERPROFILE -ChildPath "Downloads"
     Debug-Print "Carpeta elegida para descargar: $chosenPath"
     $global:downloadStatusPanel.Controls.Clear()
